@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@virentia/core": ["../virentia/packages/core/lib/index.ts"],
+      "@virentia/react": ["../virentia/packages/react/lib/index.ts"],
+      "@virentia/forms": ["packages/forms/lib/index.ts"],
+      "@virentia/forms-react": ["packages/forms-react/lib/index.ts"],
+      "@virentia/forms-zod": ["packages/forms-zod/lib/index.ts"]
+    }
+  },
+  "include": [
+    "packages/*/lib/**/*.ts",
+    "packages/*/tests/**/*.ts",
+    "packages/*/tests/**/*.tsx",
+    "packages/*/tsdown.config.ts",
+    "packages/*/vitest.config.ts",
+    "../virentia/packages/core/lib/**/*.ts",
+    "../virentia/packages/react/lib/**/*.ts"
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "name": "@virentia/forms-zod",
+  "version": "0.1.0",
+  "description": "Zod validation adapter for @virentia/forms",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/virentia-labs/forms.git",
+    "directory": "packages/forms-zod"
+  },
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@virentia/forms": "workspace:*"
+  },
+  "peerDependencies": {
+    "zod": ">=4"
+  },
+  "devDependencies": {
+    "@virentia/core": "^0.2.0",
+    "zod": "4.4.3"
+  }
+}

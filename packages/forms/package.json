@@ -1,0 +1,39 @@
+{
+  "name": "@virentia/forms",
+  "version": "0.1.0",
+  "description": "Virentia-native form models",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/virentia-labs/forms.git",
+    "directory": "packages/forms"
+  },
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "@virentia/core": ">=0.2.0"
+  },
+  "devDependencies": {
+    "@virentia/core": "^0.2.0"
+  }
+}

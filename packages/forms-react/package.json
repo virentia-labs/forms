@@ -1,0 +1,50 @@
+{
+  "name": "@virentia/forms-react",
+  "version": "0.1.0",
+  "description": "React bindings for @virentia/forms",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/virentia-labs/forms.git",
+    "directory": "packages/forms-react"
+  },
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@virentia/forms": "workspace:*"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@virentia/core": "^0.2.0",
+    "@virentia/react": "^0.2.0",
+    "happy-dom": "^20.9.0",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.6"
+  },
+  "peerDependencies": {
+    "@virentia/core": ">=0.2.0",
+    "@virentia/react": ">=0.2.0",
+    "react": ">=18"
+  }
+}

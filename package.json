@@ -1,0 +1,31 @@
+{
+  "name": "@virentia/forms-root",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "changeset": "changeset",
+    "prepare-release": "node scripts/prepare-release.mjs",
+    "release": "changeset publish",
+    "test": "pnpm -r test",
+    "typecheck": "tsc --noEmit",
+    "version-packages": "changeset version && pnpm install --lockfile-only"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.31.0",
+    "@types/react": "^19.2.7",
+    "@virentia/core": "^0.2.0",
+    "@virentia/react": "^0.2.0",
+    "react": "^19.2.1",
+    "tsdown": "^0.21.10",
+    "typescript": "^6.0.3",
+    "vitest": "0.34.6",
+    "zod": "^4.3.6"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@11.0.9"
+}
