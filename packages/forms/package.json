@@ -31,9 +31,9 @@
     "test:watch": "vitest"
   },
   "peerDependencies": {
-    "@virentia/core": ">=0.2.0"
+    "@virentia/core": ">=0.3.0"
   },
   "devDependencies": {
-    "@virentia/core": "^0.2.0"
+    "@virentia/core": "^0.3.1"
   }
 }

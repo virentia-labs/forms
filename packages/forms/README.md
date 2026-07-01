@@ -55,30 +55,6 @@ await scoped(appScope, async () => {
 });
 ```
 
-## Wizard
-
-A wizard step is a form. Use the whole form as the final payload and projections
-as steps when several screens edit one object.
-
-```ts
-import { createWizard, step } from "@virentia/forms";
-import { signupForm } from "./signup.form";
-
-export const signupWizard = createWizard({
-  form: signupForm,
-  steps: [
-    step("account", {
-      form: signupForm.pick({ email: true, password: true }),
-    }),
-    step("profile", {
-      form: signupForm.pick({ profile: true }),
-    }),
-  ],
-});
-```
-
-`wizard.next()` validates the current step form before moving forward.
-
 ## Main API
 
 `createField`, `createForm`, `createArrayField`, `createShapeField`,

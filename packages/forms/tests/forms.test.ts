@@ -42,7 +42,7 @@ describe("@virentia/forms", () => {
 
   it("composes forms and waits for custom field fill/reset", async () => {
     const appScope = scope();
-    const valueBox = store({ value: 0 });
+    const valueBox = store(0);
     const delayed = {
       kind: "delayed",
       state: computed(() => valueBox.value),
@@ -74,15 +74,15 @@ describe("@virentia/forms", () => {
     await scoped(appScope, async () => {
       await form.fill({ values: { name: "A", delayed: 42 } });
 
-      expect(form.values.name).toBe("A");
-      expect(form.values.delayed).toBe(42);
+      expect(readStoreSnapshot(form.values).name).toBe("A");
+      expect(readStoreSnapshot(form.values).delayed).toBe(42);
 
       await form.validate();
-      expect(form.errors.name).toBe("Too short");
+      expect(readStoreSnapshot(form.errors).name).toBe("Too short");
 
       await form.fill({ values: { name: "root" } });
       await form.validate();
-      expect(form.errors.name).toBe("Reserved");
+      expect(readStoreSnapshot(form.errors).name).toBe("Reserved");
 
       await form.reset();
       expect(readStoreSnapshot(form.values)).toEqual({ name: "", delayed: 0 });
@@ -97,7 +97,7 @@ describe("@virentia/forms", () => {
     const form = createForm({ schema: { attributes } });
 
     await scoped(appScope, async () => {
-      expect(form.values.attributes).toEqual({ title: "Hello" });
+      expect(readStoreSnapshot(form.values).attributes).toEqual({ title: "Hello" });
 
       await attributes.add({
         key: "slug",
@@ -107,10 +107,10 @@ describe("@virentia/forms", () => {
       });
       await form.fill({ values: { attributes: { slug: "hello-world" } } as any });
 
-      expect(form.values.attributes).toEqual({ title: "Hello", slug: "hello-world" });
+      expect(readStoreSnapshot(form.values).attributes).toEqual({ title: "Hello", slug: "hello-world" });
 
       await attributes.remove("title");
-      expect(form.values.attributes).toEqual({ slug: "hello-world" });
+      expect(readStoreSnapshot(form.values).attributes).toEqual({ slug: "hello-world" });
     });
   });
 

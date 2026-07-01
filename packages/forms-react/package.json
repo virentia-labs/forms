@@ -36,15 +36,15 @@
   "devDependencies": {
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@virentia/core": "^0.2.0",
-    "@virentia/react": "^0.2.0",
+    "@virentia/core": "^0.3.1",
+    "@virentia/react": "^0.2.3",
     "happy-dom": "^20.9.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.6"
   },
   "peerDependencies": {
-    "@virentia/core": ">=0.2.0",
-    "@virentia/react": ">=0.2.0",
+    "@virentia/core": ">=0.3.0",
+    "@virentia/react": ">=0.2.2",
     "react": ">=18"
   }
 }

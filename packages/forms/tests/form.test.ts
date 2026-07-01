@@ -94,7 +94,7 @@ describe("createForm", () => {
 
   it("waits custom field fill and reset before emitting form events", async () => {
     const appScope = scope();
-    const valueBox = store({ value: 0 });
+    const valueBox = store(0);
     const order: string[] = [];
     const delayed = {
       kind: "delayed",

@@ -15,11 +15,11 @@ importers:
         specifier: ^19.2.7
         version: 19.2.14
       '@virentia/core':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.1
+        version: 0.3.1
       '@virentia/react':
-        specifier: ^0.2.0
-        version: 0.2.0(react@19.2.6)
+        specifier: ^0.2.3
+        version: 0.2.3(react@19.2.6)
       react:
         specifier: ^19.2.1
         version: 19.2.6
@@ -39,8 +39,8 @@ importers:
   packages/forms:
     devDependencies:
       '@virentia/core':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.1
+        version: 0.3.1
 
   packages/forms-react:
     dependencies:
@@ -55,11 +55,11 @@ importers:
         specifier: ^14.6.1
         version: 14.6.1(@testing-library/dom@10.4.1)
       '@virentia/core':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.1
+        version: 0.3.1
       '@virentia/react':
-        specifier: ^0.2.0
-        version: 0.2.0(react@19.2.6)
+        specifier: ^0.2.3
+        version: 0.2.3(react@19.2.6)
       happy-dom:
         specifier: ^20.9.0
         version: 20.9.0
@@ -77,8 +77,8 @@ importers:
         version: link:../forms
     devDependencies:
       '@virentia/core':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.1
+        version: 0.3.1
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -678,11 +678,11 @@ packages:
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
-  '@virentia/core@0.2.0':
-    resolution: {integrity: sha512-pOSfof5qzizsxc8r7CULXIxRjsP3AwhNNQ9gO1Nfg8vheTCkfMv8wRA+uCPTZt6b0avRxr+FP5ISRWpXsg6Kuw==}
+  '@virentia/core@0.3.1':
+    resolution: {integrity: sha512-WttI8vLxENAPsT+HBPTG5JTa7RbMuGDOhSFQZWvGZWWxyVLPl/FPCTzQXExl7gwiW+RKF7GWfPvhVRLB5tXAKQ==}
 
-  '@virentia/react@0.2.0':
-    resolution: {integrity: sha512-iTuqwPLQHEq7iXWZPCX//RnTy76SOfvVO+yQ5kdAebwVwVhnDFaE8g+IeE5pGngAGMGRY2WXfu/3M43D2p+bIQ==}
+  '@virentia/react@0.2.3':
+    resolution: {integrity: sha512-e9Kw10VXv0D1xuxSLafD3agSfN5OPm0TUvZXNq0z7GADRjyhgGA8AUQAHhfpH10GKIR38sQbtbFD3C3KEJb45g==}
     peerDependencies:
       react: '>=18'
 
@@ -1946,11 +1946,11 @@ snapshots:
     dependencies:
       '@types/node': 25.8.0
 
-  '@virentia/core@0.2.0': {}
+  '@virentia/core@0.3.1': {}
 
-  '@virentia/react@0.2.0(react@19.2.6)':
+  '@virentia/react@0.2.3(react@19.2.6)':
     dependencies:
-      '@virentia/core': 0.2.0
+      '@virentia/core': 0.3.1
       react: 19.2.6
 
   '@vitest/expect@0.34.6':

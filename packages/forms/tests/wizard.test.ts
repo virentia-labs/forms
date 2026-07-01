@@ -223,4 +223,43 @@ describe("createWizard", () => {
       expect(readStoreSnapshot(wizard.currentId)).toBe("profile");
     });
   });
+
+  it("creates wizard form steps from the whole form or pick selections", async () => {
+    const appScope = scope();
+    const wizard = createWizardForm({
+      schema: {
+        email: createField("", {
+          validate: (value: string) => (value ? null : "Email required"),
+        }),
+        name: createField("", {
+          validate: (value: string) => (value ? null : "Name required"),
+        }),
+      },
+      steps: [
+        step("account", { pick: { email: true } }),
+        step("profile", { form: { name: true } }),
+        step("review", { form: true }),
+      ],
+    });
+
+    await scoped(appScope, async () => {
+      expect(await wizard.next()).toBe(false);
+      expect(readStoreSnapshot(wizard.form.errors)).toEqual({ email: "Email required", name: null });
+
+      await wizard.form.fill({ values: { email: "ada@example.com" } });
+      expect(await wizard.next()).toBe(true);
+      expect(readStoreSnapshot(wizard.currentId)).toBe("profile");
+
+      expect(await wizard.next()).toBe(false);
+      expect(readStoreSnapshot(wizard.form.errors)).toEqual({
+        email: null,
+        name: "Name required",
+      });
+
+      await wizard.form.fill({ values: { name: "Ada" } });
+      expect(await wizard.next()).toBe(true);
+      expect(readStoreSnapshot(wizard.currentId)).toBe("review");
+      expect(await wizard.complete()).toBe(true);
+    });
+  });
 });
