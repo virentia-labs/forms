@@ -1,4 +1,4 @@
-import { computed, event, store, type Store } from "@virentia/core";
+import { computed, effect, event, store, type Store } from "@virentia/core";
 import { createForm } from "./form";
 import { appendUnique, readStoreSnapshot, type AnyRecord } from "./shared";
 import type {
@@ -58,7 +58,21 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
   const changed = event<Steps[number]["id"]>("wizard.changed");
   const completed = event<unknown>("wizard.completed");
 
-  async function next(): Promise<boolean> {
+  const validateStepFx = effect<WizardStep, boolean>(async (current: WizardStep) => {
+    await current.form.validate();
+    return Boolean(readStoreSnapshot(current.form.isValid));
+  }, "wizard.validateStep");
+
+  const setCurrentFx = effect<Steps[number]["id"], void>(async (id: Steps[number]["id"]) => {
+    currentIdBox.value = id;
+    visitedBox.value = appendUnique(visitedBox.value, id);
+    changed(id);
+  }, "wizard.setCurrent");
+
+  // Navigation runs as effects (never plain async): the caller awaits them with a
+  // direct effect await, so its scope survives. They await one another and the
+  // step forms directly, and dispatch output events synchronously.
+  const nextFx = effect<void, boolean>(async () => {
     const visible = readStoreSnapshot(visibleSteps);
     const index = readStoreSnapshot(currentIndex);
 
@@ -67,18 +81,18 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
     }
 
     const current = visible[index];
-    const valid = await validateStep(current);
+    const valid = await validateStepFx(current);
 
     if (!valid) {
       return false;
     }
 
     markCompleted(current.id);
-    await setCurrent(visible[index + 1].id);
+    await setCurrentFx(visible[index + 1].id);
     return true;
-  }
+  }, "wizard.next");
 
-  async function back(): Promise<boolean> {
+  const backFx = effect<void, boolean>(async () => {
     const visible = readStoreSnapshot(visibleSteps);
     const index = readStoreSnapshot(currentIndex);
 
@@ -86,11 +100,11 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
       return false;
     }
 
-    await setCurrent(visible[index - 1].id);
+    await setCurrentFx(visible[index - 1].id);
     return true;
-  }
+  }, "wizard.back");
 
-  async function goTo(id: Steps[number]["id"]): Promise<boolean> {
+  const goToFx = effect<Steps[number]["id"], boolean>(async (id: Steps[number]["id"]) => {
     const visible = readStoreSnapshot(visibleSteps);
     const currentIndexValue = readStoreSnapshot(currentIndex);
     const targetIndex = visible.findIndex((item) => item.id === id);
@@ -101,7 +115,7 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
 
     if (targetIndex > currentIndexValue) {
       for (let index = currentIndexValue; index < targetIndex; index += 1) {
-        const valid = await validateStep(visible[index]);
+        const valid = await validateStepFx(visible[index]);
 
         if (!valid) {
           return false;
@@ -111,38 +125,40 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
       }
     }
 
-    await setCurrent(id);
+    await setCurrentFx(id);
     return true;
-  }
+  }, "wizard.goTo");
 
-  async function complete(): Promise<boolean> {
+  const completeFx = effect<void, boolean>(async () => {
     for (const current of readStoreSnapshot(visibleSteps)) {
-      const valid = await validateStep(current);
+      const valid = await validateStepFx(current);
 
       if (!valid) {
-        await setCurrent(current.id);
+        await setCurrentFx(current.id);
         return false;
       }
 
       markCompleted(current.id);
     }
 
-    await completed(read());
+    completed(read());
     return true;
-  }
+  }, "wizard.complete");
 
-  async function reset(): Promise<void> {
+  const resetFx = effect<void, void>(async () => {
     if (config.form) {
       await config.form.reset();
     } else {
-      await Promise.all(stepsBox.value.map((item) => item.form.reset()));
+      for (const item of stepsBox.value) {
+        await item.form.reset();
+      }
     }
 
     completedBox.value = [];
     visitedBox.value = [stepsBox.value[0].id];
     currentIdBox.value = stepsBox.value[0].id;
-    await changed(currentIdBox.value);
-  }
+    changed(currentIdBox.value);
+  }, "wizard.reset");
 
   return {
     kind: "wizard",
@@ -159,11 +175,11 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
     canGoNext,
     changed,
     completed,
-    next,
-    back,
-    goTo,
-    complete,
-    reset,
+    next: nextFx,
+    back: backFx,
+    goTo: goToFx,
+    complete: completeFx,
+    reset: resetFx,
     read,
   };
 
@@ -171,17 +187,6 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
     const values = config.form ? config.form.read() : undefined;
 
     return steps.filter((item) => !item.when || item.when({ values }));
-  }
-
-  async function validateStep(current: WizardStep): Promise<boolean> {
-    await current.form.validate();
-    return readStoreSnapshot(current.form.isValid);
-  }
-
-  async function setCurrent(id: Steps[number]["id"]): Promise<void> {
-    currentIdBox.value = id;
-    visitedBox.value = appendUnique(visitedBox.value, id);
-    await changed(id);
   }
 
   function markCompleted(id: Steps[number]["id"]): void {

@@ -1,7 +1,9 @@
 import {
   computed,
+  effect,
   event,
   getCurrentScope,
+  owner,
   reaction,
   scoped,
   type EventCallable,
@@ -68,11 +70,85 @@ export function normalizeField<Value, Errors, Fill>(
         readStoreSnapshot(normalizeField(child).isValidationPending),
       ),
     );
-  const validate =
-    field.validate ??
-    createEventMethod<void>(`${field.kind}.validate`, async () => {
-      await Promise.all(Object.values(readFields()).map((child) => normalizeField(child).validate()));
+  // Synthesized methods are effects (never plain async): the caller awaits them
+  // with a direct effect await, so its scope survives even when it keeps working
+  // afterwards. Each delegates to the field's own method when present, otherwise
+  // traverses children via the schema effects.
+  const fillFx = effect<Fill, void>(async (payload: Fill) => {
+    if (field.fill) {
+      await field.fill(payload);
+      return;
+    }
+
+    await fillSchemaFx({ schema: readFields(), values: payload as AnyRecord });
+  }, `${field.kind}.normalizedFill`);
+  const resetFx = effect<void, void>(async () => {
+    if (field.reset) {
+      await field.reset();
+      return;
+    }
+
+    await resetSchemaFx(readFields());
+  }, `${field.kind}.normalizedReset`);
+  const setInnerErrorsFx = effect<Errors, void>(async (nextErrors: Errors) => {
+    if (field.setInnerErrors) {
+      await field.setInnerErrors(nextErrors);
+      return;
+    }
+
+    await applyErrorsToSchemaFx({ schema: readFields(), errors: nextErrors as AnyRecord, channel: "inner" });
+  }, `${field.kind}.normalizedSetInnerErrors`);
+  const setOuterErrorsFx = effect<Errors, void>(async (nextErrors: Errors) => {
+    if (field.setOuterErrors) {
+      await field.setOuterErrors(nextErrors);
+      return;
+    }
+
+    await applyErrorsToSchemaFx({ schema: readFields(), errors: nextErrors as AnyRecord, channel: "outer" });
+  }, `${field.kind}.normalizedSetOuterErrors`);
+  const clearInnerErrorsFx = effect<void, void>(async () => {
+    if (field.clearInnerErrors) {
+      await field.clearInnerErrors();
+      return;
+    }
+
+    await clearSchemaErrorsFx({ schema: readFields(), channel: "inner" });
+  }, `${field.kind}.normalizedClearInnerErrors`);
+  const clearOuterErrorsFx = effect<void, void>(async () => {
+    if (field.clearOuterErrors) {
+      await field.clearOuterErrors();
+      return;
+    }
+
+    await clearSchemaErrorsFx({ schema: readFields(), channel: "outer" });
+  }, `${field.kind}.normalizedClearOuterErrors`);
+
+  let validate = field.validate;
+
+  if (!validate) {
+    // Synthesized `validate` is a plain event driven by a reaction/effect, so
+    // awaiting it is a direct unit await (no `createEventMethod` async wrapper).
+    const validateEvent = event<void>(`${field.kind}.validate`);
+    const validateFx = effect<void, void>(async () => {
+      for (const child of Object.values(readFields())) {
+        await normalizeField(child).validate();
+      }
+    }, `${field.kind}.normalizedValidate`);
+
+    reaction({
+      on: validateEvent,
+      async run() {
+        validateFx.abort();
+        try {
+          await validateFx();
+        } catch (error) {
+          ignoreAbort(error);
+        }
+      },
     });
+
+    validate = validateEvent;
+  }
 
   const normalized: NormalizedField<Value, Errors, Fill> = {
     ...field,
@@ -86,54 +162,12 @@ export function normalizeField<Value, Errors, Fill>(
     validate,
     validated,
     validationFailed,
-    async fill(payload: Fill) {
-      if (field.fill) {
-        await field.fill(payload);
-        return;
-      }
-
-      await fillSchema(readFields(), payload as AnyRecord);
-    },
-    async reset() {
-      if (field.reset) {
-        await field.reset();
-        return;
-      }
-
-      await resetSchema(readFields());
-    },
-    async setInnerErrors(nextErrors: Errors) {
-      if (field.setInnerErrors) {
-        await field.setInnerErrors(nextErrors);
-        return;
-      }
-
-      await applyErrorsToSchema(readFields(), nextErrors as AnyRecord, "inner");
-    },
-    async setOuterErrors(nextErrors: Errors) {
-      if (field.setOuterErrors) {
-        await field.setOuterErrors(nextErrors);
-        return;
-      }
-
-      await applyErrorsToSchema(readFields(), nextErrors as AnyRecord, "outer");
-    },
-    async clearInnerErrors() {
-      if (field.clearInnerErrors) {
-        await field.clearInnerErrors();
-        return;
-      }
-
-      await clearSchemaErrors(readFields(), "inner");
-    },
-    async clearOuterErrors() {
-      if (field.clearOuterErrors) {
-        await field.clearOuterErrors();
-        return;
-      }
-
-      await clearSchemaErrors(readFields(), "outer");
-    },
+    fill: fillFx,
+    reset: resetFx,
+    setInnerErrors: setInnerErrorsFx,
+    setOuterErrors: setOuterErrorsFx,
+    clearInnerErrors: clearInnerErrorsFx,
+    clearOuterErrors: clearOuterErrorsFx,
     read() {
       if (field.read) {
         return field.read();
@@ -167,6 +201,44 @@ export function readStoreSnapshot<T>(unit: Store<T> | StoreWritable<T>): T {
   return Object.fromEntries(keys.map((key) => [key, Reflect.get(unit as object, key)])) as T;
 }
 
+/**
+ * Runs `fn` with `scope` active and restores the previously active scope
+ * synchronously, returning whatever `fn` produced.
+ *
+ * `scoped(scope, asyncFn)` only restores the previous scope once the returned
+ * promise settles (see @virentia/core `runScopeTask`), so it keeps `scope`
+ * active across every `await` inside `asyncFn`. When such work is launched
+ * detached from a reaction, that late restoration writes the reaction's firing
+ * scope back into the global active scope and leaks it into unrelated work.
+ *
+ * `emitIn` instead keeps `scope` active only for the synchronous portion of
+ * `fn` — long enough to dispatch units and read stores under the right scope —
+ * and hands back the resulting promise for the caller to await outside of any
+ * scope. Awaiting a promise needs no active scope, so nothing leaks.
+ */
+export function emitIn<T>(scope: Scope, fn: () => T): T {
+  let result!: T;
+
+  scoped(scope, () => {
+    result = fn();
+  });
+
+  return result;
+}
+
+/**
+ * Swallows the `AbortError` a superseded effect run rejects with (cancel-previous
+ * validation), while re-throwing anything else. Lets callers `await` a validation
+ * that a newer run aborted without the abort surfacing as a failure.
+ */
+export function ignoreAbort(error: unknown): void {
+  if ((error as { name?: string } | null)?.name === "AbortError") {
+    return;
+  }
+
+  throw error;
+}
+
 export function createEventMethod<T>(
   name: string,
   handler: (payload: T) => Promise<void>,
@@ -177,44 +249,53 @@ export function createEventMethod<T>(
     const payload = args[0] as T;
     await handler(payload);
 
+    const dispatch = signal as (...payload: PayloadArgs<T>) => Promise<void>;
+
     if (callScope) {
-      await scoped(callScope, () => (signal as (...payload: PayloadArgs<T>) => Promise<void>)(...args));
+      await emitIn(callScope, () => dispatch(...args));
       return;
     }
 
-    await (signal as (...payload: PayloadArgs<T>) => Promise<void>)(...args);
+    await dispatch(...args);
   }) as EventCallable<T>;
 
   return Object.assign(method, signal);
 }
 
 export function createValidationDependencyTracker(runAgain: () => Promise<void>) {
-  const subscriptions = new WeakMap<Scope, () => void>();
+  const disposers = new WeakMap<Scope, () => void>();
 
   return {
     update(scope: Scope, dependencies: ReadonlySet<AnyStore>): void {
-      subscriptions.get(scope)?.();
+      disposers.get(scope)?.();
 
       if (dependencies.size === 0) {
-        subscriptions.delete(scope);
+        disposers.delete(scope);
         return;
       }
 
-      const unsubscribers = [...dependencies].map((dependency) =>
-        dependency.subscribe((_value: unknown, nextScope: Scope) => {
-          if (nextScope !== scope) {
-            return;
-          }
+      // Watch the read stores through a scope-bound reaction that awaits the
+      // re-run. Unlike a raw `store.subscribe` callback, a reaction restores the
+      // active scope after it settles even when it fires detached (from a write
+      // in a suspended scope), so revalidation never clobbers the ambient scope
+      // of concurrent work.
+      const dispose = owner((disposeOwner) => {
+        reaction({
+          on: [...dependencies],
+          scope,
+          async run() {
+            try {
+              await runAgain();
+            } catch (error) {
+              ignoreAbort(error);
+            }
+          },
+        });
 
-          void scoped(scope, () => runAgain());
-        }),
-      );
-
-      subscriptions.set(scope, () => {
-        for (const unsubscribe of unsubscribers) {
-          unsubscribe();
-        }
+        return disposeOwner;
       });
+
+      disposers.set(scope, dispose);
     },
   };
 }
@@ -235,6 +316,10 @@ export function createValidationContext(config: {
   };
 }
 
+// Validator runners are plain async — the one place it is safe, because the only
+// thing they `await` is a *user validator* (an external boundary), not a unit
+// that needs the ambient scope. The caller does a single `await` and then reads
+// synchronously.
 export async function runFieldValidators<Value, Errors>(
   validators: readonly FieldValidator<Value, Errors>[],
   value: Value,
@@ -345,79 +430,91 @@ export function readArrayErrors(
   return items.map((field) => readStoreSnapshot(normalizeField(field)[channel]));
 }
 
-export async function fillSchema(schema: AnyRecord, values: AnyRecord): Promise<void> {
-  await Promise.all(
-    Object.entries(values).map(([key, value]) => {
+// Schema traversal runs as per-call effects: the caller awaits one of these with
+// a direct effect await, which restores the caller's scope on return. Recursion
+// re-invokes the same effect (also a direct await).
+export const fillSchemaFx = effect<{ schema: AnyRecord; values: AnyRecord }, void>(
+  async ({ schema, values }) => {
+    for (const [key, value] of Object.entries(values)) {
       const fieldOrSchema = schema[key];
 
       if (!fieldOrSchema) {
-        return undefined;
+        continue;
       }
 
-      return isFieldContract(fieldOrSchema)
-        ? normalizeField(fieldOrSchema).fill(value)
-        : fillSchema(fieldOrSchema, value as AnyRecord);
-    }),
-  );
-}
+      if (isFieldContract(fieldOrSchema)) {
+        await normalizeField(fieldOrSchema).fill(value);
+      } else {
+        await fillSchemaFx({ schema: fieldOrSchema, values: value as AnyRecord });
+      }
+    }
+  },
+  "forms.fillSchema",
+);
 
-export async function resetSchema(schema: AnyRecord): Promise<void> {
-  await Promise.all(
-    Object.values(schema).map((fieldOrSchema) =>
-      isFieldContract(fieldOrSchema) ? normalizeField(fieldOrSchema).reset() : resetSchema(fieldOrSchema),
-    ),
-  );
-}
+export const resetSchemaFx = effect<AnyRecord, void>(async (schema) => {
+  for (const fieldOrSchema of Object.values(schema)) {
+    if (isFieldContract(fieldOrSchema)) {
+      await normalizeField(fieldOrSchema).reset();
+    } else {
+      await resetSchemaFx(fieldOrSchema);
+    }
+  }
+}, "forms.resetSchema");
 
-export async function validateSchema(schema: AnyRecord): Promise<void> {
-  await Promise.all(
-    Object.values(schema).map((fieldOrSchema) =>
-      isFieldContract(fieldOrSchema) ? normalizeField(fieldOrSchema).validate() : validateSchema(fieldOrSchema),
-    ),
-  );
-}
+export const validateSchemaFx = effect<AnyRecord, void>(async (schema) => {
+  for (const fieldOrSchema of Object.values(schema)) {
+    if (isFieldContract(fieldOrSchema)) {
+      await normalizeField(fieldOrSchema).validate();
+    } else {
+      await validateSchemaFx(fieldOrSchema);
+    }
+  }
+}, "forms.validateSchema");
 
-export async function clearSchemaErrors(schema: AnyRecord, channel: "inner" | "outer"): Promise<void> {
-  await Promise.all(
-    Object.values(schema).map((fieldOrSchema) => {
+export const clearSchemaErrorsFx = effect<{ schema: AnyRecord; channel: "inner" | "outer" }, void>(
+  async ({ schema, channel }) => {
+    for (const fieldOrSchema of Object.values(schema)) {
       if (isFieldContract(fieldOrSchema)) {
         const field = normalizeField(fieldOrSchema);
-        return channel === "inner" ? field.clearInnerErrors() : field.clearOuterErrors();
+        if (channel === "inner") {
+          await field.clearInnerErrors();
+        } else {
+          await field.clearOuterErrors();
+        }
+      } else {
+        await clearSchemaErrorsFx({ schema: fieldOrSchema, channel });
       }
+    }
+  },
+  "forms.clearSchemaErrors",
+);
 
-      return clearSchemaErrors(fieldOrSchema, channel);
-    }),
-  );
-}
-
-export async function applyErrorsToSchema(
-  schema: AnyRecord,
-  errors: AnyRecord,
-  channel: "inner" | "outer",
-): Promise<void> {
+export const applyErrorsToSchemaFx = effect<
+  { schema: AnyRecord; errors: AnyRecord; channel: "inner" | "outer" },
+  void
+>(async ({ schema, errors, channel }) => {
   const normalizedErrors = expandDottedPaths(errors);
 
-  await Promise.all(
-    Object.entries(normalizedErrors).map(([key, errorValue]) => {
-      const fieldOrSchema = schema[key];
+  for (const [key, errorValue] of Object.entries(normalizedErrors)) {
+    const fieldOrSchema = schema[key];
 
-      if (!fieldOrSchema) {
-        return undefined;
+    if (!fieldOrSchema) {
+      continue;
+    }
+
+    if (isFieldContract(fieldOrSchema)) {
+      const field = normalizeField(fieldOrSchema);
+      if (channel === "inner") {
+        await field.setInnerErrors(errorValue);
+      } else {
+        await field.setOuterErrors(errorValue);
       }
-
-      if (isFieldContract(fieldOrSchema)) {
-        const field = normalizeField(fieldOrSchema);
-        return channel === "inner" ? field.setInnerErrors(errorValue) : field.setOuterErrors(errorValue);
-      }
-
-      if (errorValue && typeof errorValue === "object") {
-        return applyErrorsToSchema(fieldOrSchema, errorValue as AnyRecord, channel);
-      }
-
-      return undefined;
-    }),
-  );
-}
+    } else if (errorValue && typeof errorValue === "object") {
+      await applyErrorsToSchemaFx({ schema: fieldOrSchema, errors: errorValue as AnyRecord, channel });
+    }
+  }
+}, "forms.applyErrorsToSchema");
 
 function expandDottedPaths(input: AnyRecord): AnyRecord {
   const result: AnyRecord = {};
@@ -491,9 +588,7 @@ export function attachSchemaChangeValidation(schema: AnyRecord, validate: () => 
       reaction({
         on: field.changed,
         run() {
-          const currentScope = requireCurrentScope();
-
-          void scoped(currentScope, () => validate());
+          void emitIn(requireCurrentScope(), () => validate());
         },
       });
     } else {

@@ -1,4 +1,4 @@
-import { computed, event, reaction, scoped, store } from "@virentia/core";
+import { computed, effect, event, reaction, store } from "@virentia/core";
 import type {
   CreateFieldOptions,
   Field,
@@ -7,17 +7,15 @@ import type {
   ValidationFunction,
 } from "./types";
 import {
-  createEventMethod,
   createValidationContext,
   createValidationDependencyTracker,
   emptyFields,
   hasErrors,
+  ignoreAbort,
   readStoreSnapshot,
-  requireCurrentScope,
   runFieldValidators,
   toArray,
   type AnyStore,
-  type ValidationRunReason,
 } from "./shared";
 
 type FunctionFieldValidationOptions<Value, Meta extends object> = Omit<
@@ -61,7 +59,6 @@ export function createField<Value, Meta extends object = Record<string, never>>(
   const outerErrorBox = store<FieldError>(initialOuterError);
   const focusedBox = store(false);
   const metaBox = store(initialMeta);
-  const validationPendingBox = store(false);
   const validators = toArray(options.validate);
   const strategies = new Set(options.validationStrategies ?? []);
 
@@ -72,7 +69,6 @@ export function createField<Value, Meta extends object = Record<string, never>>(
   const meta = computed(() => metaBox.value);
   const isFocused = computed(() => focusedBox.value);
   const isValid = computed(() => error.value === null);
-  const isValidationPending = computed(() => validationPendingBox.value);
 
   const change = event<Value>("field.change");
   const changed = event<Value>("field.changed");
@@ -87,95 +83,69 @@ export function createField<Value, Meta extends object = Record<string, never>>(
   const changeMeta = event<Meta>("field.changeMeta");
   const validated = event<Value>("field.validated");
   const validationFailed = event<Value>("field.validationFailed");
-  const dependencyTracker = createValidationDependencyTracker(() => runValidation("dependency"));
-  let validationController: AbortController | null = null;
-  let validationVersion = 0;
 
-  async function fill(next: Value): Promise<void> {
+  // Every side effect that touches units or scope is an effect: the kernel keeps
+  // `ctx.scope` active across each `await`, and `ctx.signal` aborts the run when a
+  // newer one starts (cancel-previous / stale-result handling). Reactions await
+  // these effects, so the work stays bound to the dispatch scope instead of
+  // escaping it as detached fire-and-forget.
+  const validateFx = effect<void, void>(async (_payload, { scope, signal }) => {
+    const dependencies = new Set<AnyStore>();
+    const ctx = createValidationContext({ path: [], signal, dependencies, scope });
+    const nextError = await runFieldValidators(validators, read(), ctx);
+
+    if (signal.aborted) {
+      return;
+    }
+
+    innerErrorBox.value = nextError;
+    dependencyTracker.update(scope, dependencies);
+
+    const nextValue = read();
+    errorsChanged(readStoreSnapshot(error));
+
+    if (hasErrors(nextError)) {
+      validationFailed(nextValue);
+    } else {
+      validated(nextValue);
+    }
+  }, "field.validate.effect");
+
+  // `validate` is a plain event; the reaction below runs validation. Revalidating
+  // is just re-dispatching it, so every trigger is a direct unit await and there
+  // is no `async` wrapper (which would drop the ambient scope).
+  const validate = event<void>("field.validate");
+  const dependencyTracker = createValidationDependencyTracker(validate);
+  const isValidationPending = validateFx.pending;
+
+  const fillFx = effect<Value, void>(async (next) => {
     valueBox.value = next;
-    await changed(next);
+    changed(next);
 
     if (strategies.has("change")) {
       await validate();
     }
-  }
+  }, "field.fill.effect");
 
-  async function reset(): Promise<void> {
+  const resetFx = effect<void, void>(async () => {
     valueBox.value = initial;
     innerErrorBox.value = null;
     outerErrorBox.value = initialOuterError;
     metaBox.value = initialMeta;
     focusedBox.value = false;
-    await Promise.all([changed(initial), errorsChanged(readStoreSnapshot(error))]);
-  }
+    changed(initial);
+    errorsChanged(readStoreSnapshot(error));
+  }, "field.reset.effect");
 
-  async function setInnerErrors(errorValue: FieldError): Promise<void> {
+  const setInnerErrorsFx = effect<FieldError, void>(async (errorValue) => {
     innerErrorBox.value = errorValue;
-    await errorsChanged(readStoreSnapshot(error));
-  }
+    errorsChanged(readStoreSnapshot(error));
+  }, "field.setInnerErrors.effect");
 
-  async function setOuterErrors(errorValue: FieldError): Promise<void> {
+  const setOuterErrorsFx = effect<FieldError, void>(async (errorValue) => {
     outerErrorBox.value = errorValue;
-    await errorsChanged(readStoreSnapshot(error));
-  }
-
-  async function clearInnerErrors(): Promise<void> {
-    await setInnerErrors(null);
-  }
-
-  async function clearOuterErrors(): Promise<void> {
-    await setOuterErrors(null);
-  }
-
-  async function runValidation(strategy: ValidationRunReason): Promise<void> {
-    const scope = requireCurrentScope();
-    validationController?.abort();
-    const controller = new AbortController();
-    const version = ++validationVersion;
-    validationController = controller;
-    scoped(scope, () => {
-      validationPendingBox.value = true;
-    });
-
-    const dependencies = new Set<AnyStore>();
-    const ctx = createValidationContext({
-      path: [],
-      signal: controller.signal,
-      dependencies,
-      scope,
-    });
-
-    try {
-      const nextError = await runFieldValidators(validators, scoped(scope, () => read()), ctx);
-
-      if (version !== validationVersion || controller.signal.aborted) {
-        return;
-      }
-
-      await scoped(scope, async () => {
-        innerErrorBox.value = nextError;
-        dependencyTracker.update(scope, dependencies);
-
-        const nextValue = read();
-        await Promise.all([
-          errorsChanged(readStoreSnapshot(error)),
-          hasErrors(nextError) ? validationFailed(nextValue) : validated(nextValue),
-        ]);
-      });
-    } finally {
-      if (version === validationVersion) {
-        scoped(scope, () => {
-          validationPendingBox.value = false;
-        });
-      }
-    }
-
-    void strategy;
-  }
-
-  const validate = createEventMethod<void>("field.validate", async () => {
-    await runValidation("manual");
-  });
+    errorsChanged(readStoreSnapshot(error));
+  }, "field.setOuterErrors.effect");
 
   const field: Field<Value, Meta> = {
     kind: "field",
@@ -191,7 +161,7 @@ export function createField<Value, Meta extends object = Record<string, never>>(
     isFocused,
     isValidationPending,
     change,
-    fill,
+    fill: fillFx,
     changed,
     focus,
     focused,
@@ -201,12 +171,12 @@ export function createField<Value, Meta extends object = Record<string, never>>(
     setInnerError,
     setOuterError,
     errorsChanged,
-    setInnerErrors,
-    setOuterErrors,
-    clearInnerErrors,
-    clearOuterErrors,
+    setInnerErrors: setInnerErrorsFx,
+    setOuterErrors: setOuterErrorsFx,
+    clearInnerErrors: () => setInnerErrorsFx(null),
+    clearOuterErrors: () => setOuterErrorsFx(null),
     changeMeta,
-    reset,
+    reset: resetFx,
     validate,
     validated,
     validationFailed,
@@ -218,61 +188,60 @@ export function createField<Value, Meta extends object = Record<string, never>>(
   };
 
   reaction({
+    on: validate,
+    async run() {
+      validateFx.abort();
+      try {
+        await validateFx();
+      } catch (error) {
+        ignoreAbort(error);
+      }
+    },
+  });
+  reaction({
     on: change,
-    run(next) {
-      const currentScope = requireCurrentScope();
-
-      void scoped(currentScope, () => fill(next));
+    async run(next) {
+      await fillFx(next);
     },
   });
   reaction({
     on: focus,
-    run() {
+    async run() {
       focusedBox.value = true;
-      void focused();
+      focused();
 
       if (strategies.has("focus")) {
-        const currentScope = requireCurrentScope();
-
-        void scoped(currentScope, () => validate());
+        await validate();
       }
     },
   });
   reaction({
     on: blur,
-    run() {
+    async run() {
       focusedBox.value = false;
-      void blurred();
+      blurred();
 
       if (strategies.has("blur")) {
-        const currentScope = requireCurrentScope();
-
-        void scoped(currentScope, () => validate());
+        await validate();
       }
     },
   });
   reaction({
     on: changeError,
-    run(errorValue) {
-      const currentScope = requireCurrentScope();
-
-      void scoped(currentScope, () => setOuterErrors(errorValue));
+    async run(errorValue) {
+      await setOuterErrorsFx(errorValue);
     },
   });
   reaction({
     on: setInnerError,
-    run(errorValue) {
-      const currentScope = requireCurrentScope();
-
-      void scoped(currentScope, () => setInnerErrors(errorValue));
+    async run(errorValue) {
+      await setInnerErrorsFx(errorValue);
     },
   });
   reaction({
     on: setOuterError,
-    run(errorValue) {
-      const currentScope = requireCurrentScope();
-
-      void scoped(currentScope, () => setOuterErrors(errorValue));
+    async run(errorValue) {
+      await setOuterErrorsFx(errorValue);
     },
   });
   reaction({

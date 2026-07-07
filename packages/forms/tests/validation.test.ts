@@ -109,7 +109,7 @@ describe("validation", () => {
       expect(readStoreSnapshot(form.errors)).toEqual({ age: "Too young" });
 
       minAge.value = 16;
-      await tick(3);
+      await scoped(() => tick(100));
       expect(readStoreSnapshot(form.errors)).toEqual({ age: null });
     });
   });
@@ -133,7 +133,10 @@ describe("validation", () => {
       expect(readStoreSnapshot(tags.errors)).toBe("Too few tags");
 
       minItems.value = 1;
-      await tick(100);
+      // Pump the queue for the dependency-driven revalidation while keeping the
+      // ambient scope: a raw `await tick` is not a unit await and would drop the
+      // scope, so run it through `scoped`.
+      await scoped(() => tick(100));
       expect(readStoreSnapshot(tags.errors)).toEqual(["Tag required"]);
     });
   });

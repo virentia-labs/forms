@@ -1,21 +1,19 @@
-import { computed, event, scoped, store } from "@virentia/core";
+import { computed, effect, event, reaction, store } from "@virentia/core";
 import { createField } from "./field";
 import {
-  applyErrorsToSchema,
-  createEventMethod,
+  applyErrorsToSchemaFx,
   createValidationContext,
   createValidationDependencyTracker,
   hasErrors,
+  ignoreAbort,
   isFieldContract,
   normalizeField,
   readObjectErrors,
   readObjectValues,
   readStoreSnapshot,
-  requireCurrentScope,
   runFormValidators,
   toArray,
   type AnyStore,
-  type ValidationRunReason,
 } from "./shared";
 import type {
   AnyField,
@@ -41,7 +39,6 @@ export function createShapeField(
   const fieldsBox = store(initialFields);
   const validators = toArray(options.validate);
   const strategies = new Set(options.validationStrategies ?? []);
-  const validationPendingBox = store(false);
   const fields = computed(() => fieldsBox.value as Readonly<Record<string, AnyField>>);
   const state = computed(() => readObjectValues(fieldsBox.value) as ShapeValues<Record<string, AnyField>>);
   const innerErrors = computed(
@@ -62,152 +59,168 @@ export function createShapeField(
       !hasErrors(ownInnerErrorsBox.value) &&
       Object.values(fieldsBox.value).every((field) => readStoreSnapshot(normalizeField(field).isValid)),
   );
-  const isValidationPending = computed(
-    () =>
-      validationPendingBox.value ||
-      Object.values(fieldsBox.value).some((field) =>
-        readStoreSnapshot(normalizeField(field).isValidationPending),
-      ),
-  );
   const changed = event<Record<string, unknown>>("shapeField.changed");
   const errorsChanged = event<Record<string, unknown>>("shapeField.errorsChanged");
   const validated = event<Record<string, unknown>>("shapeField.validated");
   const validationFailed = event<Record<string, unknown>>("shapeField.validationFailed");
-  const dependencyTracker = createValidationDependencyTracker(() => runValidation("dependency"));
-  let validationController: AbortController | null = null;
-  let validationVersion = 0;
 
-  async function emitState(): Promise<void> {
-    await Promise.all([changed(read()), errorsChanged(readStoreSnapshot(errors))]);
-  }
+  // Effects await units one at a time in imperative order — never `Promise.all`,
+  // never through an intermediate `async` helper or `.catch` that ends on an
+  // effect await — so the kernel keeps this effect's scope alive across each
+  // await. Schema traversal collects synchronous thunks; the effect awaits them
+  // one by one.
+  const validateFx = effect<void, void>(async (_payload, { scope, signal }) => {
+    const dependencies = new Set<AnyStore>();
+    const ctx = createValidationContext({ path: [], signal, dependencies, scope });
 
-  async function fill(nextValues: Record<string, unknown>): Promise<void> {
+    for (const child of Object.values(fieldsBox.value)) {
+      await normalizeField(child).validate();
+    }
+
+    const nextErrors = await runFormValidators(validators, read(), ctx);
+
+    if (signal.aborted) {
+      return;
+    }
+
+    if (nextErrors && typeof nextErrors === "object") {
+      ownInnerErrorsBox.value = null;
+      await applyErrorsToSchemaFx({ schema: fieldsBox.value, errors: nextErrors as Record<string, unknown>, channel: "inner" });
+    } else {
+      ownInnerErrorsBox.value = (nextErrors ?? null) as Record<string, unknown> | null;
+    }
+
+    dependencyTracker.update(scope, dependencies);
+
+    errorsChanged(readStoreSnapshot(errors));
+
+    if (readStoreSnapshot(isValid)) {
+      validated(read());
+    } else {
+      validationFailed(read());
+    }
+  }, "shapeField.validate.effect");
+
+  // `validate` is a plain event; the reaction below runs validation. Revalidating
+  // is re-dispatching it — a direct unit await, no `async` wrapper.
+  const validate = event<void>("shapeField.validate");
+  reaction({
+    on: validate,
+    async run() {
+      validateFx.abort();
+      try {
+        await validateFx();
+      } catch (error) {
+        ignoreAbort(error);
+      }
+    },
+  });
+
+  const dependencyTracker = createValidationDependencyTracker(validate);
+  const isValidationPending = computed(
+    () =>
+      validateFx.pending.value ||
+      Object.values(fieldsBox.value).some((field) =>
+        readStoreSnapshot(normalizeField(field).isValidationPending),
+      ),
+  );
+
+  const fillFx = effect<Record<string, unknown>, void>(async (nextValues) => {
     const nextFields = { ...fieldsBox.value };
-    const work: Promise<void>[] = [];
+    const fills: Array<() => Promise<void>> = [];
 
     for (const [key, value] of Object.entries(nextValues)) {
       const field = nextFields[key];
 
       if (field) {
-        work.push(normalizeField(field).fill(value));
+        const normalized = normalizeField(field);
+        fills.push(() => normalized.fill(value));
       } else {
         nextFields[key] = createShapeChild(key, value, options);
       }
     }
 
     fieldsBox.value = nextFields;
-    await Promise.all(work);
-    await emitState();
+
+    for (const fill of fills) {
+      await fill();
+    }
+
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
 
     if (strategies.has("change")) {
       await validate();
     }
-  }
+  }, "shapeField.fill.effect");
 
-  async function reset(): Promise<void> {
+  const resetFx = effect<void, void>(async () => {
     fieldsBox.value = { ...initialFields };
     ownInnerErrorsBox.value = null;
-    await Promise.all(Object.values(fieldsBox.value).map((field) => normalizeField(field).reset()));
-    await emitState();
-  }
 
-  async function add(payload: { key: string; field: AnyField }): Promise<void> {
+    for (const field of Object.values(fieldsBox.value)) {
+      await normalizeField(field).reset();
+    }
+
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "shapeField.reset.effect");
+
+  const addFx = effect<{ key: string; field: AnyField }, void>(async (payload) => {
     fieldsBox.value = { ...fieldsBox.value, [payload.key]: payload.field };
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "shapeField.add.effect");
 
-  async function remove(key: string): Promise<void> {
+  const removeFx = effect<string, void>(async (key) => {
     if (!(key in fieldsBox.value)) {
       return;
     }
 
     const { [key]: _removed, ...next } = fieldsBox.value;
     fieldsBox.value = next;
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "shapeField.remove.effect");
 
-  async function replace(payload: { key: string; field: AnyField }): Promise<void> {
+  const replaceFx = effect<{ key: string; field: AnyField }, void>(async (payload) => {
     fieldsBox.value = { ...fieldsBox.value, [payload.key]: payload.field };
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "shapeField.replace.effect");
 
-  async function clear(): Promise<void> {
+  const clearFx = effect<void, void>(async () => {
     fieldsBox.value = {};
     ownInnerErrorsBox.value = null;
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "shapeField.clear.effect");
 
-  async function setInnerErrors(nextErrors: Record<string, unknown>): Promise<void> {
+  const setInnerErrorsFx = effect<Record<string, unknown>, void>(async (nextErrors) => {
     ownInnerErrorsBox.value = null;
-    await applyErrorsToSchema(fieldsBox.value, nextErrors, "inner");
-    await errorsChanged(readStoreSnapshot(errors));
-  }
+    await applyErrorsToSchemaFx({ schema: fieldsBox.value, errors: nextErrors, channel: "inner" });
+    errorsChanged(readStoreSnapshot(errors));
+  }, "shapeField.setInnerErrors.effect");
 
-  async function setOuterErrors(nextErrors: Record<string, unknown>): Promise<void> {
-    await applyErrorsToSchema(fieldsBox.value, nextErrors, "outer");
-    await errorsChanged(readStoreSnapshot(errors));
-  }
+  const setOuterErrorsFx = effect<Record<string, unknown>, void>(async (nextErrors) => {
+    await applyErrorsToSchemaFx({ schema: fieldsBox.value, errors: nextErrors, channel: "outer" });
+    errorsChanged(readStoreSnapshot(errors));
+  }, "shapeField.setOuterErrors.effect");
 
-  async function clearInnerErrors(): Promise<void> {
+  const clearInnerErrorsFx = effect<void, void>(async () => {
     ownInnerErrorsBox.value = null;
-    await Promise.all(Object.values(fieldsBox.value).map((field) => normalizeField(field).clearInnerErrors()));
-    await errorsChanged(readStoreSnapshot(errors));
-  }
-
-  async function clearOuterErrors(): Promise<void> {
-    await Promise.all(Object.values(fieldsBox.value).map((field) => normalizeField(field).clearOuterErrors()));
-    await errorsChanged(readStoreSnapshot(errors));
-  }
-
-  async function runValidation(strategy: ValidationRunReason): Promise<void> {
-    const scope = requireCurrentScope();
-    validationController?.abort();
-    const controller = new AbortController();
-    const version = ++validationVersion;
-    validationController = controller;
-    scoped(scope, () => {
-      validationPendingBox.value = true;
-    });
-
-    const dependencies = new Set<AnyStore>();
-    const ctx = createValidationContext({ path: [], signal: controller.signal, dependencies, scope });
-
-    try {
-      await scoped(scope, () =>
-        Promise.all(Object.values(fieldsBox.value).map((field) => normalizeField(field).validate())),
-      );
-      const nextErrors = await runFormValidators(validators, scoped(scope, () => read()), ctx);
-
-      if (version !== validationVersion || controller.signal.aborted) {
-        return;
-      }
-
-      await scoped(scope, async () => {
-        ownInnerErrorsBox.value = nextErrors as Record<string, unknown> | null;
-        if (nextErrors && typeof nextErrors === "object") {
-          await setInnerErrors(nextErrors as Record<string, unknown>);
-        }
-        dependencyTracker.update(scope, dependencies);
-
-        await Promise.all([
-          errorsChanged(readStoreSnapshot(errors)),
-          readStoreSnapshot(isValid) ? validated(read()) : validationFailed(read()),
-        ]);
-      });
-    } finally {
-      if (version === validationVersion) {
-        scoped(scope, () => {
-          validationPendingBox.value = false;
-        });
-      }
+    for (const field of Object.values(fieldsBox.value)) {
+      await normalizeField(field).clearInnerErrors();
     }
+    errorsChanged(readStoreSnapshot(errors));
+  }, "shapeField.clearInnerErrors.effect");
 
-    void strategy;
-  }
-
-  const validate = createEventMethod<void>("shapeField.validate", async () => {
-    await runValidation("manual");
-  });
+  const clearOuterErrorsFx = effect<void, void>(async () => {
+    for (const field of Object.values(fieldsBox.value)) {
+      await normalizeField(field).clearOuterErrors();
+    }
+    errorsChanged(readStoreSnapshot(errors));
+  }, "shapeField.clearOuterErrors.effect");
 
   return {
     kind: "shape",
@@ -223,16 +236,16 @@ export function createShapeField(
     validate,
     validated,
     validationFailed,
-    fill,
-    reset,
-    setInnerErrors,
-    setOuterErrors,
-    clearInnerErrors,
-    clearOuterErrors,
-    add,
-    remove,
-    replace,
-    clear,
+    fill: fillFx,
+    reset: resetFx,
+    setInnerErrors: setInnerErrorsFx,
+    setOuterErrors: setOuterErrorsFx,
+    clearInnerErrors: () => clearInnerErrorsFx(),
+    clearOuterErrors: () => clearOuterErrorsFx(),
+    add: addFx,
+    remove: removeFx,
+    replace: replaceFx,
+    clear: () => clearFx(),
     read,
     readFields() {
       return fieldsBox.value;

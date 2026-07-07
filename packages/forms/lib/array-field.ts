@@ -1,22 +1,20 @@
-import { computed, event, scoped, store, type Store } from "@virentia/core";
+import { computed, effect, event, reaction, store, type Store } from "@virentia/core";
 import { createField } from "./field";
 import {
   clampIndex,
-  createEventMethod,
   createValidationContext,
   createValidationDependencyTracker,
   hasErrors,
   hasIndex,
+  ignoreAbort,
   isFieldContract,
   normalizeField,
   readArrayErrors,
   readArrayValue,
   readStoreSnapshot,
-  requireCurrentScope,
   runFieldValidators,
   toArray,
   type AnyStore,
-  type ValidationRunReason,
 } from "./shared";
 import type {
   AnyField,
@@ -38,7 +36,6 @@ export function createArrayField<Value, ItemField extends AnyField = Field<Value
   const itemsBox = store(initial.map((value, index) => createItem(value, index)));
   const innerErrorBox = store<FieldError>(null);
   const outerErrorBox = store<FieldError>(null);
-  const validationPendingBox = store(false);
   const items = computed(() => itemsBox.value as readonly ItemField[]);
   const itemFields = computed(
     () => Object.fromEntries(itemsBox.value.map((field, index) => [String(index), field])) as Readonly<Record<string, ItemField>>,
@@ -61,75 +58,134 @@ export function createArrayField<Value, ItemField extends AnyField = Field<Value
       !hasErrors(innerErrorBox.value) &&
       itemsBox.value.every((field) => readStoreSnapshot(normalizeField(field).isValid)),
   );
-  const isValidationPending = computed(
-    () =>
-      validationPendingBox.value ||
-      itemsBox.value.some((field) => readStoreSnapshot(normalizeField(field).isValidationPending)),
-  );
   const changed = event<readonly Value[]>("arrayField.changed");
   const errorsChanged = event<ArrayFieldErrors<FieldErrors<ItemField>>>("arrayField.errorsChanged");
   const validated = event<readonly Value[]>("arrayField.validated");
   const validationFailed = event<readonly Value[]>("arrayField.validationFailed");
-  const dependencyTracker = createValidationDependencyTracker(() => runValidation("dependency"));
-  let validationController: AbortController | null = null;
-  let validationVersion = 0;
 
-  async function emitState(): Promise<void> {
-    await Promise.all([changed(read()), errorsChanged(readStoreSnapshot(errors))]);
-  }
+  const validateFx = effect<void, void>(async (_payload, { scope, signal }) => {
+    const dependencies = new Set<AnyStore>();
+    const ctx = createValidationContext({ path: [], signal, dependencies, scope });
 
-  async function fill(nextValues: readonly Value[]): Promise<void> {
+    for (const field of itemsBox.value) {
+      await normalizeField(field).validate();
+    }
+
+    const nextError = (await runFieldValidators(validators, read(), ctx)) as FieldError | readonly unknown[];
+
+    if (signal.aborted) {
+      return;
+    }
+
+    const errorIsArray = Array.isArray(nextError);
+    innerErrorBox.value = (errorIsArray ? null : nextError) as FieldError;
+
+    if (errorIsArray) {
+      const itemErrors = nextError as readonly unknown[];
+      const currentItems = itemsBox.value;
+      for (let index = 0; index < currentItems.length; index += 1) {
+        await normalizeField(currentItems[index]).setInnerErrors(itemErrors[index]);
+      }
+    }
+
+    dependencyTracker.update(scope, dependencies);
+
+    errorsChanged(readStoreSnapshot(errors));
+
+    if (readStoreSnapshot(isValid)) {
+      validated(read());
+    } else {
+      validationFailed(read());
+    }
+  }, "arrayField.validate.effect");
+
+  // `validate` is a plain event; the reaction below runs validation. Revalidating
+  // is re-dispatching it — a direct unit await, no `async` wrapper.
+  const validate = event<void>("arrayField.validate");
+  reaction({
+    on: validate,
+    async run() {
+      validateFx.abort();
+      try {
+        await validateFx();
+      } catch (error) {
+        ignoreAbort(error);
+      }
+    },
+  });
+
+  const dependencyTracker = createValidationDependencyTracker(validate);
+  const isValidationPending = computed(
+    () =>
+      validateFx.pending.value ||
+      itemsBox.value.some((field) => readStoreSnapshot(normalizeField(field).isValidationPending)),
+  );
+
+  const fillFx = effect<readonly Value[], void>(async (nextValues) => {
     const nextItems = itemsBox.value.slice(0, nextValues.length);
-    const work: Promise<void>[] = [];
+    const fills: Array<() => Promise<void>> = [];
 
     for (let index = 0; index < nextValues.length; index += 1) {
       const field = nextItems[index];
 
       if (field) {
-        work.push(normalizeField(field).fill(nextValues[index]));
+        const normalized = normalizeField(field);
+        const value = nextValues[index];
+        fills.push(() => normalized.fill(value));
       } else {
         nextItems[index] = createItem(nextValues[index], index);
       }
     }
 
     itemsBox.value = nextItems;
-    await Promise.all(work);
-    await emitState();
+
+    for (const fill of fills) {
+      await fill();
+    }
+
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
 
     if (strategies.has("change")) {
       await validate();
     }
-  }
+  }, "arrayField.fill.effect");
 
-  async function reset(): Promise<void> {
+  const resetFx = effect<void, void>(async () => {
     itemsBox.value = initial.map((item, index) => createItem(item, index));
     innerErrorBox.value = null;
     outerErrorBox.value = null;
-    await Promise.all(itemsBox.value.map((field) => normalizeField(field).reset()));
-    await emitState();
-  }
 
-  async function push(input: Value | ItemField): Promise<void> {
-    const nextField = toArrayItem(input, itemsBox.value.length);
-    itemsBox.value = [...itemsBox.value, nextField];
-    await emitState();
-  }
+    for (const field of itemsBox.value) {
+      await normalizeField(field).reset();
+    }
 
-  async function unshift(input: Value | ItemField): Promise<void> {
-    const nextField = toArrayItem(input, 0);
-    itemsBox.value = [nextField, ...itemsBox.value];
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.reset.effect");
 
-  async function insert(index: number, input: Value | ItemField): Promise<void> {
+  const pushFx = effect<Value | ItemField, void>(async (input) => {
+    itemsBox.value = [...itemsBox.value, toArrayItem(input, itemsBox.value.length)];
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.push.effect");
+
+  const unshiftFx = effect<Value | ItemField, void>(async (input) => {
+    itemsBox.value = [toArrayItem(input, 0), ...itemsBox.value];
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.unshift.effect");
+
+  const insertFx = effect<{ index: number; input: Value | ItemField }, void>(async ({ index, input }) => {
     const safeIndex = clampIndex(index, 0, itemsBox.value.length);
     const next = itemsBox.value.slice();
     next.splice(safeIndex, 0, toArrayItem(input, safeIndex));
     itemsBox.value = next;
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.insert.effect");
 
-  async function remove(index: number): Promise<void> {
+  const removeFx = effect<number, void>(async (index) => {
     if (!hasIndex(itemsBox.value, index)) {
       return;
     }
@@ -137,16 +193,13 @@ export function createArrayField<Value, ItemField extends AnyField = Field<Value
     const next = itemsBox.value.slice();
     next.splice(index, 1);
     itemsBox.value = next;
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.remove.effect");
 
-  async function pop(): Promise<void> {
-    await remove(itemsBox.value.length - 1);
-  }
-
-  async function replace(index: number, input: Value | ItemField): Promise<void> {
+  const replaceFx = effect<{ index: number; input: Value | ItemField }, void>(async ({ index, input }) => {
     if (!hasIndex(itemsBox.value, index)) {
-      await insert(index, input);
+      await insertFx({ index, input });
       return;
     }
 
@@ -160,10 +213,11 @@ export function createArrayField<Value, ItemField extends AnyField = Field<Value
       await normalizeField(current).fill(input);
     }
 
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.replace.effect");
 
-  async function move(from: number, to: number): Promise<void> {
+  const moveFx = effect<{ from: number; to: number }, void>(async ({ from, to }) => {
     if (!hasIndex(itemsBox.value, from)) {
       return;
     }
@@ -173,10 +227,11 @@ export function createArrayField<Value, ItemField extends AnyField = Field<Value
     const [field] = next.splice(from, 1);
     next.splice(safeTo, 0, field);
     itemsBox.value = next;
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.move.effect");
 
-  async function swap(first: number, second: number): Promise<void> {
+  const swapFx = effect<{ first: number; second: number }, void>(async ({ first, second }) => {
     if (!hasIndex(itemsBox.value, first) || !hasIndex(itemsBox.value, second)) {
       return;
     }
@@ -184,107 +239,63 @@ export function createArrayField<Value, ItemField extends AnyField = Field<Value
     const next = itemsBox.value.slice();
     [next[first], next[second]] = [next[second], next[first]];
     itemsBox.value = next;
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.swap.effect");
 
-  async function clear(): Promise<void> {
+  const clearFx = effect<void, void>(async () => {
     itemsBox.value = [];
     innerErrorBox.value = null;
     outerErrorBox.value = null;
-    await emitState();
-  }
+    changed(read());
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.clear.effect");
 
-  async function setInnerErrors(nextErrors: ArrayFieldErrors<FieldErrors<ItemField>>): Promise<void> {
+  const setInnerErrorsFx = effect<ArrayFieldErrors<FieldErrors<ItemField>>, void>(async (nextErrors) => {
     if (Array.isArray(nextErrors)) {
       innerErrorBox.value = null;
-      await Promise.all(
-        itemsBox.value.map((field, index) =>
-          normalizeField(field).setInnerErrors((nextErrors as readonly unknown[])[index]),
-        ),
-      );
+      const itemErrors = nextErrors as readonly unknown[];
+      const currentItems = itemsBox.value;
+      for (let index = 0; index < currentItems.length; index += 1) {
+        await normalizeField(currentItems[index]).setInnerErrors(itemErrors[index]);
+      }
     } else {
       innerErrorBox.value = nextErrors as FieldError;
     }
 
-    await errorsChanged(readStoreSnapshot(errors));
-  }
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.setInnerErrors.effect");
 
-  async function setOuterErrors(nextErrors: ArrayFieldErrors<FieldErrors<ItemField>>): Promise<void> {
+  const setOuterErrorsFx = effect<ArrayFieldErrors<FieldErrors<ItemField>>, void>(async (nextErrors) => {
     if (Array.isArray(nextErrors)) {
       outerErrorBox.value = null;
-      await Promise.all(
-        itemsBox.value.map((field, index) =>
-          normalizeField(field).setOuterErrors((nextErrors as readonly unknown[])[index]),
-        ),
-      );
+      const itemErrors = nextErrors as readonly unknown[];
+      const currentItems = itemsBox.value;
+      for (let index = 0; index < currentItems.length; index += 1) {
+        await normalizeField(currentItems[index]).setOuterErrors(itemErrors[index]);
+      }
     } else {
       outerErrorBox.value = nextErrors as FieldError;
     }
 
-    await errorsChanged(readStoreSnapshot(errors));
-  }
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.setOuterErrors.effect");
 
-  async function clearInnerErrors(): Promise<void> {
+  const clearInnerErrorsFx = effect<void, void>(async () => {
     innerErrorBox.value = null;
-    await Promise.all(itemsBox.value.map((field) => normalizeField(field).clearInnerErrors()));
-    await errorsChanged(readStoreSnapshot(errors));
-  }
-
-  async function clearOuterErrors(): Promise<void> {
-    outerErrorBox.value = null;
-    await Promise.all(itemsBox.value.map((field) => normalizeField(field).clearOuterErrors()));
-    await errorsChanged(readStoreSnapshot(errors));
-  }
-
-  async function runValidation(strategy: ValidationRunReason): Promise<void> {
-    const scope = requireCurrentScope();
-    validationController?.abort();
-    const controller = new AbortController();
-    const version = ++validationVersion;
-    validationController = controller;
-    scoped(scope, () => {
-      validationPendingBox.value = true;
-    });
-
-    const dependencies = new Set<AnyStore>();
-    const ctx = createValidationContext({ path: [], signal: controller.signal, dependencies, scope });
-
-    try {
-      await scoped(scope, () =>
-        Promise.all(itemsBox.value.map((field) => normalizeField(field).validate())),
-      );
-      const nextError = await runFieldValidators(validators, scoped(scope, () => read()), ctx);
-
-      if (version !== validationVersion || controller.signal.aborted) {
-        return;
-      }
-
-      await scoped(scope, async () => {
-        innerErrorBox.value = (Array.isArray(nextError) ? null : nextError) as FieldError;
-        if (Array.isArray(nextError)) {
-          await setInnerErrors(nextError as ArrayFieldErrors<FieldErrors<ItemField>>);
-        }
-        dependencyTracker.update(scope, dependencies);
-
-        await Promise.all([
-          errorsChanged(readStoreSnapshot(errors)),
-          readStoreSnapshot(isValid) ? validated(read()) : validationFailed(read()),
-        ]);
-      });
-    } finally {
-      if (version === validationVersion) {
-        scoped(scope, () => {
-          validationPendingBox.value = false;
-        });
-      }
+    for (const field of itemsBox.value) {
+      await normalizeField(field).clearInnerErrors();
     }
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.clearInnerErrors.effect");
 
-    void strategy;
-  }
-
-  const validate = createEventMethod<void>("arrayField.validate", async () => {
-    await runValidation("manual");
-  });
+  const clearOuterErrorsFx = effect<void, void>(async () => {
+    outerErrorBox.value = null;
+    for (const field of itemsBox.value) {
+      await normalizeField(field).clearOuterErrors();
+    }
+    errorsChanged(readStoreSnapshot(errors));
+  }, "arrayField.clearOuterErrors.effect");
 
   const field: ArrayField<Value, ItemField> = {
     kind: "array",
@@ -303,21 +314,21 @@ export function createArrayField<Value, ItemField extends AnyField = Field<Value
     validate,
     validated,
     validationFailed,
-    fill,
-    reset,
-    setInnerErrors,
-    setOuterErrors,
-    clearInnerErrors,
-    clearOuterErrors,
-    push,
-    unshift,
-    insert,
-    remove,
-    pop,
-    replace,
-    move,
-    swap,
-    clear,
+    fill: fillFx,
+    reset: resetFx,
+    setInnerErrors: setInnerErrorsFx,
+    setOuterErrors: setOuterErrorsFx,
+    clearInnerErrors: () => clearInnerErrorsFx(),
+    clearOuterErrors: () => clearOuterErrorsFx(),
+    push: (input) => pushFx(input),
+    unshift: (input) => unshiftFx(input),
+    insert: (index, input) => insertFx({ index, input }),
+    remove: (index) => removeFx(index),
+    pop: () => removeFx(itemsBox.value.length - 1),
+    replace: (index, input) => replaceFx({ index, input }),
+    move: (from, to) => moveFx({ from, to }),
+    swap: (first, second) => swapFx({ first, second }),
+    clear: () => clearFx(),
     read,
     readFields() {
       return readStoreSnapshot(fields);

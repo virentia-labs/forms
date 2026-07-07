@@ -1,31 +1,29 @@
-import { computed, event, reactive, scoped, scope as createScope, store } from "@virentia/core";
+import { computed, effect, event, reaction, reactive, scoped, scope as createScope } from "@virentia/core";
 import { createField } from "./field";
 import {
-  applyErrorsToSchema,
+  applyErrorsToSchemaFx,
   attachSchemaChangeValidation,
-  clearSchemaErrors,
+  clearSchemaErrorsFx,
   cloneSnapshot,
-  createEventMethod,
   createValidationContext,
   createValidationDependencyTracker,
   deepEqual,
-  fillSchema,
+  fillSchemaFx,
   hasErrors,
+  ignoreAbort,
   isFieldContract,
   isPlainObject,
   pickSchema,
   readSchemaErrors,
   readSchemaValues,
   readStoreSnapshot,
-  requireCurrentScope,
-  resetSchema,
+  resetSchemaFx,
   runFormValidators,
   schemaIsPending,
   toArray,
-  validateSchema,
+  validateSchemaFx,
   type AnyRecord,
   type AnyStore,
-  type ValidationRunReason,
 } from "./shared";
 import type {
   CreateFormConfig,
@@ -74,7 +72,6 @@ export function createForm<Schema extends AnyRecord>(
   const fields = normalizeSchema(config.schema) as NormalizeSchema<Schema>;
   const validators = toArray(config.validation);
   const strategies = new Set(config.validationStrategies ?? []);
-  const formPendingBox = store(false);
   const initialSnapshot = scoped(createScope(), () =>
     cloneSnapshot(readSchemaValues(fields) as SchemaValues<Schema>),
   );
@@ -92,7 +89,6 @@ export function createForm<Schema extends AnyRecord>(
   );
   const isChanged = computed(() => !deepEqual(readStoreSnapshot(values), readStoreSnapshot(snapshot)));
   const isValid = computed(() => !hasErrors(readStoreSnapshot(errors)));
-  const isValidationPending = computed(() => formPendingBox.value || schemaIsPending(fields));
   const filled = event<SchemaValues<Schema>>("form.filled");
   const changed = event<SchemaValues<Schema>>("form.changed");
   const errorsChanged = event<SchemaErrors<Schema>>("form.errorsChanged");
@@ -100,137 +96,128 @@ export function createForm<Schema extends AnyRecord>(
   const validationFailed = event<SchemaValues<Schema>>("form.validationFailed");
   const submitted = event<SchemaValues<Schema>>("form.submitted");
   const validatedAndSubmitted = event<SchemaValues<Schema>>("form.validatedAndSubmitted");
-  const dependencyTracker = createValidationDependencyTracker(() => runValidation("dependency"));
-  let validationController: AbortController | null = null;
-  let validationVersion = 0;
 
-  async function fill(payload: {
-    values?: PartialRecursive<SchemaValues<Schema>>;
-    errors?: PartialRecursive<SchemaErrors<Schema>>;
-  }): Promise<void> {
-    const scope = requireCurrentScope();
+  // Every side effect that touches units or scope runs as an effect: the kernel
+  // keeps `ctx.scope` active across each `await`, and `ctx.signal` supersedes a
+  // stale validation run. Nothing reads or writes a store outside an
+  // effect/reaction, so the work stays bound to the dispatch scope.
+  const validateFx = effect<void, void>(async (_payload, { scope, signal }) => {
+    const dependencies = new Set<AnyStore>();
+    const ctx = createValidationContext({ path: [], signal, dependencies, scope });
 
+    await clearSchemaErrorsFx({ schema: fields, channel: "inner" });
+    errorsChanged(readStoreSnapshot(errors));
+
+    await validateSchemaFx(fields);
+
+    const nextErrors = await runFormValidators(validators, readStoreSnapshot(values), ctx);
+
+    if (signal.aborted) {
+      return;
+    }
+
+    if (nextErrors) {
+      await applyErrorsToSchemaFx({ schema: fields, errors: nextErrors as AnyRecord, channel: "inner" });
+    }
+
+    dependencyTracker.update(scope, dependencies);
+    const nextValues = readStoreSnapshot(values);
+
+    errorsChanged(readStoreSnapshot(errors));
+
+    if (readStoreSnapshot(isValid)) {
+      validated(nextValues);
+    } else {
+      validationFailed(nextValues);
+    }
+  }, "form.validate.effect");
+
+  // `validate` is a plain event; the reaction below runs validation. Revalidating
+  // is re-dispatching it — a direct unit await, no `async` wrapper.
+  const validate = event<void>("form.validate");
+  reaction({
+    on: validate,
+    async run() {
+      validateFx.abort();
+      try {
+        await validateFx();
+      } catch (error) {
+        ignoreAbort(error);
+      }
+    },
+  });
+
+  const dependencyTracker = createValidationDependencyTracker(validate);
+  const isValidationPending = computed(() => validateFx.pending.value || schemaIsPending(fields));
+
+  const fillFx = effect<
+    { values?: PartialRecursive<SchemaValues<Schema>>; errors?: PartialRecursive<SchemaErrors<Schema>> },
+    void
+  >(async (payload) => {
     if (payload.values) {
-      await fillSchema(fields, payload.values as AnyRecord);
+      await fillSchemaFx({ schema: fields, values: payload.values as AnyRecord });
     }
 
     if (payload.errors) {
-      await applyErrorsToSchema(fields, payload.errors as AnyRecord, "outer");
+      await applyErrorsToSchemaFx({ schema: fields, errors: payload.errors as AnyRecord, channel: "outer" });
     }
 
-    const nextValues = scoped(scope, () => readStoreSnapshot(values));
-    await scoped(scope, () =>
-      Promise.all([
-        filled(nextValues),
-        changed(nextValues),
-        errorsChanged(readStoreSnapshot(errors)),
-      ]),
-    );
+    // Dispatch every event in one synchronous block (no `await` between calls):
+    // the scope is live for all of them, and there is no second suspension point
+    // to lose it at — unlike awaiting them one by one after the child work above.
+    const nextValues = readStoreSnapshot(values);
+    filled(nextValues);
+    changed(nextValues);
+    errorsChanged(readStoreSnapshot(errors));
 
     if (strategies.has("change")) {
       await validate();
     }
-  }
+  }, "form.fill.effect");
 
-  async function reset(): Promise<void> {
-    const scope = requireCurrentScope();
+  const resetFx = effect<void, void>(async () => {
+    await resetSchemaFx(fields);
+    snapshotBox.initialized = true;
+    snapshotBox.value = cloneSnapshot(initialSnapshot);
+    changed(readStoreSnapshot(values));
+    errorsChanged(readStoreSnapshot(errors));
+  }, "form.reset.effect");
 
-    await resetSchema(fields);
-    scoped(scope, () => {
-      snapshotBox.initialized = true;
-      snapshotBox.value = cloneSnapshot(initialSnapshot);
-    });
-    await scoped(scope, () =>
-      Promise.all([changed(readStoreSnapshot(values)), errorsChanged(readStoreSnapshot(errors))]),
-    );
-  }
+  const clearOuterErrorsFx = effect<void, void>(async () => {
+    await clearSchemaErrorsFx({ schema: fields, channel: "outer" });
+    errorsChanged(readStoreSnapshot(errors));
+  }, "form.clearOuterErrors.effect");
 
-  async function clearOuterErrors(): Promise<void> {
-    const scope = requireCurrentScope();
+  const clearInnerErrorsFx = effect<void, void>(async () => {
+    await clearSchemaErrorsFx({ schema: fields, channel: "inner" });
+    errorsChanged(readStoreSnapshot(errors));
+  }, "form.clearInnerErrors.effect");
 
-    await clearSchemaErrors(fields, "outer");
-    await scoped(scope, () => errorsChanged(readStoreSnapshot(errors)));
-  }
+  const forceUpdateSnapshotFx = effect<void, void>(async () => {
+    snapshotBox.initialized = true;
+    snapshotBox.value = cloneSnapshot(readStoreSnapshot(values));
+  }, "form.forceUpdateSnapshot.effect");
 
-  async function clearInnerErrors(): Promise<void> {
-    const scope = requireCurrentScope();
+  const persistFx = effect<
+    { values: PartialRecursive<SchemaValues<Schema>>; errors?: PartialRecursive<SchemaErrors<Schema>> },
+    void
+  >(async (payload) => {
+    await fillFx({ values: payload.values, errors: payload.errors });
+    await forceUpdateSnapshotFx();
+  }, "form.persist.effect");
 
-    await clearSchemaErrors(fields, "inner");
-    await scoped(scope, () => errorsChanged(readStoreSnapshot(errors)));
-  }
+  const submit = event<void>("form.submit");
+  reaction({
+    on: submit,
+    async run() {
+      submitted(readStoreSnapshot(values));
+      await validate();
 
-  async function forceUpdateSnapshot(): Promise<void> {
-    const scope = requireCurrentScope();
-
-    scoped(scope, () => {
-      snapshotBox.initialized = true;
-      snapshotBox.value = cloneSnapshot(readStoreSnapshot(values));
-    });
-  }
-
-  async function runValidation(strategy: ValidationRunReason): Promise<void> {
-    const scope = requireCurrentScope();
-    validationController?.abort();
-    const controller = new AbortController();
-    const version = ++validationVersion;
-    validationController = controller;
-    scoped(scope, () => {
-      formPendingBox.value = true;
-    });
-
-    const dependencies = new Set<AnyStore>();
-    const ctx = createValidationContext({ path: [], signal: controller.signal, dependencies, scope });
-
-    try {
-      await scoped(scope, () => clearInnerErrors());
-      await scoped(scope, () => validateSchema(fields));
-      const nextErrors = await runFormValidators(
-        validators,
-        scoped(scope, () => readStoreSnapshot(values)),
-        ctx,
-      );
-
-      if (version !== validationVersion || controller.signal.aborted) {
-        return;
+      if (readStoreSnapshot(isValid)) {
+        await forceUpdateSnapshotFx();
+        validatedAndSubmitted(readStoreSnapshot(values));
       }
-
-      await scoped(scope, async () => {
-        if (nextErrors) {
-          await applyErrorsToSchema(fields, nextErrors as AnyRecord, "inner");
-        }
-
-        dependencyTracker.update(scope, dependencies);
-        const nextValues = readStoreSnapshot(values);
-        const valid = readStoreSnapshot(isValid);
-        await Promise.all([
-          errorsChanged(readStoreSnapshot(errors)),
-          valid ? validated(nextValues) : validationFailed(nextValues),
-        ]);
-      });
-    } finally {
-      if (version === validationVersion) {
-        scoped(scope, () => {
-          formPendingBox.value = false;
-        });
-      }
-    }
-
-    void strategy;
-  }
-
-  const validate = createEventMethod<void>("form.validate", async () => {
-    await runValidation("manual");
-  });
-
-  const submit = createEventMethod<void>("form.submit", async () => {
-    const nextValues = readStoreSnapshot(values);
-    await submitted(nextValues);
-    await runValidation("submit");
-
-    if (readStoreSnapshot(isValid)) {
-      await forceUpdateSnapshot();
-      await validatedAndSubmitted(readStoreSnapshot(values));
-    }
+    },
   });
 
   const form: Form<Schema> = {
@@ -254,11 +241,11 @@ export function createForm<Schema extends AnyRecord>(
     submit,
     submitted,
     validatedAndSubmitted,
-    fill,
-    reset,
-    clearOuterErrors,
-    clearInnerErrors,
-    forceUpdateSnapshot,
+    fill: fillFx,
+    reset: resetFx,
+    clearOuterErrors: () => clearOuterErrorsFx(),
+    clearInnerErrors: () => clearInnerErrorsFx(),
+    forceUpdateSnapshot: () => forceUpdateSnapshotFx(),
     pick(selection) {
       return createForm({
         schema: pickSchema(fields, selection as AnyRecord),
@@ -268,10 +255,7 @@ export function createForm<Schema extends AnyRecord>(
     serialize() {
       return { values: readStoreSnapshot(values), errors: readStoreSnapshot(errors) };
     },
-    async persist(payload) {
-      await fill({ values: payload.values, errors: payload.errors });
-      await forceUpdateSnapshot();
-    },
+    persist: persistFx,
     read() {
       return readStoreSnapshot(values);
     },
