@@ -1,5 +1,13 @@
 # @virentia/forms-react
 
+## 0.2.1
+
+### Patch Changes
+
+- refactor: bump virentia packages & move to effects / scoped
+- Updated dependencies
+  - @virentia/forms@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

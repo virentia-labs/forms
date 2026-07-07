@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { scope, scoped, store } from "@virentia/core";
-import { createArrayField, createField, createForm, readStoreSnapshot } from "@virentia/forms";
+import {
+  createArrayField,
+  createField,
+  createForm,
+  readStoreSnapshot,
+} from "@virentia/forms";
 import { z } from "zod";
 import { zodFieldValidator, zodValidator } from "../lib";
 
@@ -61,7 +66,10 @@ describe("@virentia/forms-zod", () => {
 
     await scoped(appScope, async () => {
       await form.fill({ values: { a: "a", b: "a" } });
-      expect(readStoreSnapshot(form.errors)).toEqual({ a: "min 2", b: "min 4" });
+      expect(readStoreSnapshot(form.errors)).toEqual({
+        a: "min 2",
+        b: "min 4",
+      });
 
       await form.fill({ values: { a: "aa" } });
       expect(readStoreSnapshot(form.errors)).toEqual({ a: null, b: "min 4" });
@@ -97,7 +105,10 @@ describe("@virentia/forms-zod", () => {
       });
 
       await form.fill({ values: { confirm: "secret" } });
-      expect(readStoreSnapshot(form.errors)).toEqual({ password: null, confirm: null });
+      expect(readStoreSnapshot(form.errors)).toEqual({
+        password: null,
+        confirm: null,
+      });
     });
   });
 
@@ -127,7 +138,9 @@ describe("@virentia/forms-zod", () => {
     });
 
     await scoped(appScope, async () => {
-      await form.fill({ values: { name: "Test", contractType: "a", contractId: "123" } });
+      await form.fill({
+        values: { name: "Test", contractType: "a", contractId: "123" },
+      });
       expect(readStoreSnapshot(form.errors)).toEqual({
         name: null,
         contractType: null,
@@ -195,7 +208,7 @@ describe("@virentia/forms-zod", () => {
       expect(readStoreSnapshot(form.errors)).toEqual({ name: null });
 
       maxLength.value = 2;
-      await tick(100);
+      await scoped(() => tick(100));
       expect(readStoreSnapshot(form.errors)).toEqual({ name: "Too long" });
     });
   });

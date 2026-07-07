@@ -11,9 +11,6 @@
     "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
-      "@virentia/core": ["../virentia/packages/core/lib/index.ts"],
-      "@virentia/react": ["../virentia/packages/react/lib/index.ts"],
-      "@virentia/effector": ["../virentia/packages/effector/lib/index.ts"],
       "@virentia/forms": ["packages/forms/lib/index.ts"],
       "@virentia/forms-react": ["packages/forms-react/lib/index.ts"],
       "@virentia/forms-zod": ["packages/forms-zod/lib/index.ts"],
@@ -25,9 +22,6 @@
     "packages/*/tests/**/*.ts",
     "packages/*/tests/**/*.tsx",
     "packages/*/tsdown.config.ts",
-    "packages/*/vitest.config.ts",
-    "../virentia/packages/core/lib/**/*.ts",
-    "../virentia/packages/react/lib/**/*.ts",
-    "../virentia/packages/effector/lib/**/*.ts"
+    "packages/*/vitest.config.ts"
   ]
 }

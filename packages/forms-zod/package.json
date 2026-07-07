@@ -1,6 +1,6 @@
 {
   "name": "@virentia/forms-zod",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Zod validation adapter for @virentia/forms",
   "license": "MIT",
   "repository": {
@@ -37,7 +37,7 @@
     "zod": ">=4"
   },
   "devDependencies": {
-    "@virentia/core": "^0.6.1",
+    "@virentia/core": "^0.6.3",
     "zod": "4.4.3"
   }
 }

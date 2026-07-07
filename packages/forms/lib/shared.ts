@@ -52,17 +52,28 @@ export function normalizeField<Value, Errors, Fill>(
   const readFields = () => readFieldChildren(field);
   const hasChildren = () => Object.keys(readFields()).length > 0;
   const emptyErrors = computed(() => null as Errors);
-  const childrenErrors = computed(() => readObjectErrors(readFields(), "errors") as Errors);
-  const childrenInnerErrors = computed(() => readObjectErrors(readFields(), "innerErrors") as Errors);
-  const childrenOuterErrors = computed(() => readObjectErrors(readFields(), "outerErrors") as Errors);
+  const childrenErrors = computed(
+    () => readObjectErrors(readFields(), "errors") as Errors,
+  );
+  const childrenInnerErrors = computed(
+    () => readObjectErrors(readFields(), "innerErrors") as Errors,
+  );
+  const childrenOuterErrors = computed(
+    () => readObjectErrors(readFields(), "outerErrors") as Errors,
+  );
   const errors = field.errors ?? (hasChildren() ? childrenErrors : emptyErrors);
-  const innerErrors = field.innerErrors ?? (hasChildren() ? childrenInnerErrors : emptyErrors);
-  const outerErrors = field.outerErrors ?? (hasChildren() ? childrenOuterErrors : emptyErrors);
+  const innerErrors =
+    field.innerErrors ?? (hasChildren() ? childrenInnerErrors : emptyErrors);
+  const outerErrors =
+    field.outerErrors ?? (hasChildren() ? childrenOuterErrors : emptyErrors);
   const changed = field.changed ?? event<Value>(`${field.kind}.changed`);
-  const errorsChanged = field.errorsChanged ?? event<Errors>(`${field.kind}.errorsChanged`);
+  const errorsChanged =
+    field.errorsChanged ?? event<Errors>(`${field.kind}.errorsChanged`);
   const validated = field.validated ?? event<Value>(`${field.kind}.validated`);
-  const validationFailed = field.validationFailed ?? event<Value>(`${field.kind}.validationFailed`);
-  const isValid = field.isValid ?? computed(() => !hasErrors(readStoreSnapshot(errors)));
+  const validationFailed =
+    field.validationFailed ?? event<Value>(`${field.kind}.validationFailed`);
+  const isValid =
+    field.isValid ?? computed(() => !hasErrors(readStoreSnapshot(errors)));
   const isValidationPending =
     field.isValidationPending ??
     computed(() =>
@@ -96,7 +107,11 @@ export function normalizeField<Value, Errors, Fill>(
       return;
     }
 
-    await applyErrorsToSchemaFx({ schema: readFields(), errors: nextErrors as AnyRecord, channel: "inner" });
+    await applyErrorsToSchemaFx({
+      schema: readFields(),
+      errors: nextErrors as AnyRecord,
+      channel: "inner",
+    });
   }, `${field.kind}.normalizedSetInnerErrors`);
   const setOuterErrorsFx = effect<Errors, void>(async (nextErrors: Errors) => {
     if (field.setOuterErrors) {
@@ -104,7 +119,11 @@ export function normalizeField<Value, Errors, Fill>(
       return;
     }
 
-    await applyErrorsToSchemaFx({ schema: readFields(), errors: nextErrors as AnyRecord, channel: "outer" });
+    await applyErrorsToSchemaFx({
+      schema: readFields(),
+      errors: nextErrors as AnyRecord,
+      channel: "outer",
+    });
   }, `${field.kind}.normalizedSetOuterErrors`);
   const clearInnerErrorsFx = effect<void, void>(async () => {
     if (field.clearInnerErrors) {
@@ -187,7 +206,9 @@ export function normalizeField<Value, Errors, Fill>(
 }
 
 export function readStoreSnapshot<T>(unit: Store<T> | StoreWritable<T>): T {
-  const keys = Reflect.ownKeys(unit as object).filter((key) => !nativeStoreKeys.has(key));
+  const keys = Reflect.ownKeys(unit as object).filter(
+    (key) => !nativeStoreKeys.has(key),
+  );
 
   if (keys.length === 1 && keys[0] === "value") {
     return Reflect.get(unit as object, "value") as T;
@@ -195,10 +216,14 @@ export function readStoreSnapshot<T>(unit: Store<T> | StoreWritable<T>): T {
 
   if (isArrayStoreSnapshot(unit, keys)) {
     const length = Reflect.get(unit as object, "length") as number;
-    return Array.from({ length }, (_item, index) => Reflect.get(unit as object, String(index))) as T;
+    return Array.from({ length }, (_item, index) =>
+      Reflect.get(unit as object, String(index)),
+    ) as T;
   }
 
-  return Object.fromEntries(keys.map((key) => [key, Reflect.get(unit as object, key)])) as T;
+  return Object.fromEntries(
+    keys.map((key) => [key, Reflect.get(unit as object, key)]),
+  ) as T;
 }
 
 /**
@@ -262,7 +287,9 @@ export function createEventMethod<T>(
   return Object.assign(method, signal);
 }
 
-export function createValidationDependencyTracker(runAgain: () => Promise<void>) {
+export function createValidationDependencyTracker(
+  runAgain: () => Promise<void>,
+) {
   const disposers = new WeakMap<Scope, () => void>();
 
   return {
@@ -377,10 +404,10 @@ function isValidationEffect<Value, Errors>(
 ): validator is ValidationEffect<Value, Errors> {
   return Boolean(
     typeof validator === "function" &&
-      "pending" in validator &&
-      "inFlight" in validator &&
-      "done" in validator &&
-      "failed" in validator,
+    "pending" in validator &&
+    "inFlight" in validator &&
+    "done" in validator &&
+    "failed" in validator,
   );
 }
 
@@ -395,7 +422,10 @@ export function readSchemaValues(schema: AnyRecord): AnyRecord {
   );
 }
 
-export function readSchemaErrors(schema: AnyRecord, channel: "errors" | "innerErrors" | "outerErrors"): AnyRecord {
+export function readSchemaErrors(
+  schema: AnyRecord,
+  channel: "errors" | "innerErrors" | "outerErrors",
+): AnyRecord {
   return Object.fromEntries(
     Object.entries(schema).map(([key, fieldOrSchema]) => [
       key,
@@ -406,8 +436,15 @@ export function readSchemaErrors(schema: AnyRecord, channel: "errors" | "innerEr
   );
 }
 
-export function readObjectValues(fields: Record<string, AnyField>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, normalizeField(field).read()]));
+export function readObjectValues(
+  fields: Record<string, AnyField>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(fields).map(([key, field]) => [
+      key,
+      normalizeField(field).read(),
+    ]),
+  );
 }
 
 export function readObjectErrors(
@@ -415,11 +452,16 @@ export function readObjectErrors(
   channel: "errors" | "innerErrors" | "outerErrors",
 ): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(fields).map(([key, field]) => [key, readStoreSnapshot(normalizeField(field)[channel])]),
+    Object.entries(fields).map(([key, field]) => [
+      key,
+      readStoreSnapshot(normalizeField(field)[channel]),
+    ]),
   );
 }
 
-export function readArrayValue<Value>(items: readonly AnyField[]): readonly Value[] {
+export function readArrayValue<Value>(
+  items: readonly AnyField[],
+): readonly Value[] {
   return items.map((field) => normalizeField(field).read()) as readonly Value[];
 }
 
@@ -427,32 +469,35 @@ export function readArrayErrors(
   items: readonly AnyField[],
   channel: "errors" | "innerErrors" | "outerErrors",
 ): readonly unknown[] {
-  return items.map((field) => readStoreSnapshot(normalizeField(field)[channel]));
+  return items.map((field) =>
+    readStoreSnapshot(normalizeField(field)[channel]),
+  );
 }
 
 // Schema traversal runs as per-call effects: the caller awaits one of these with
 // a direct effect await, which restores the caller's scope on return. Recursion
 // re-invokes the same effect (also a direct await).
-export const fillSchemaFx = effect<{ schema: AnyRecord; values: AnyRecord }, void>(
-  async ({ schema, values }) => {
-    for (const [key, value] of Object.entries(values)) {
-      const fieldOrSchema = schema[key];
+export const fillSchemaFx = effect<
+  { schema: AnyRecord; values: AnyRecord },
+  void,
+  Error
+>(async ({ schema, values }) => {
+  for (const [key, value] of Object.entries(values)) {
+    const fieldOrSchema = schema[key];
 
-      if (!fieldOrSchema) {
-        continue;
-      }
-
-      if (isFieldContract(fieldOrSchema)) {
-        await normalizeField(fieldOrSchema).fill(value);
-      } else {
-        await fillSchemaFx({ schema: fieldOrSchema, values: value as AnyRecord });
-      }
+    if (!fieldOrSchema) {
+      continue;
     }
-  },
-  "forms.fillSchema",
-);
 
-export const resetSchemaFx = effect<AnyRecord, void>(async (schema) => {
+    if (isFieldContract(fieldOrSchema)) {
+      await normalizeField(fieldOrSchema).fill(value);
+    } else {
+      await fillSchemaFx({ schema: fieldOrSchema, values: value as AnyRecord });
+    }
+  }
+}, "forms.fillSchema");
+
+export const resetSchemaFx = effect<AnyRecord, void, Error>(async (schema) => {
   for (const fieldOrSchema of Object.values(schema)) {
     if (isFieldContract(fieldOrSchema)) {
       await normalizeField(fieldOrSchema).reset();
@@ -462,37 +507,42 @@ export const resetSchemaFx = effect<AnyRecord, void>(async (schema) => {
   }
 }, "forms.resetSchema");
 
-export const validateSchemaFx = effect<AnyRecord, void>(async (schema) => {
-  for (const fieldOrSchema of Object.values(schema)) {
-    if (isFieldContract(fieldOrSchema)) {
-      await normalizeField(fieldOrSchema).validate();
-    } else {
-      await validateSchemaFx(fieldOrSchema);
-    }
-  }
-}, "forms.validateSchema");
-
-export const clearSchemaErrorsFx = effect<{ schema: AnyRecord; channel: "inner" | "outer" }, void>(
-  async ({ schema, channel }) => {
+export const validateSchemaFx = effect<AnyRecord, void, Error>(
+  async (schema) => {
     for (const fieldOrSchema of Object.values(schema)) {
       if (isFieldContract(fieldOrSchema)) {
-        const field = normalizeField(fieldOrSchema);
-        if (channel === "inner") {
-          await field.clearInnerErrors();
-        } else {
-          await field.clearOuterErrors();
-        }
+        await normalizeField(fieldOrSchema).validate();
       } else {
-        await clearSchemaErrorsFx({ schema: fieldOrSchema, channel });
+        await validateSchemaFx(fieldOrSchema);
       }
     }
   },
-  "forms.clearSchemaErrors",
+  "forms.validateSchema",
 );
+
+export const clearSchemaErrorsFx = effect<
+  { schema: AnyRecord; channel: "inner" | "outer" },
+  void,
+  Error
+>(async ({ schema, channel }) => {
+  for (const fieldOrSchema of Object.values(schema)) {
+    if (isFieldContract(fieldOrSchema)) {
+      const field = normalizeField(fieldOrSchema);
+      if (channel === "inner") {
+        await field.clearInnerErrors();
+      } else {
+        await field.clearOuterErrors();
+      }
+    } else {
+      await clearSchemaErrorsFx({ schema: fieldOrSchema, channel });
+    }
+  }
+}, "forms.clearSchemaErrors");
 
 export const applyErrorsToSchemaFx = effect<
   { schema: AnyRecord; errors: AnyRecord; channel: "inner" | "outer" },
-  void
+  void,
+  Error
 >(async ({ schema, errors, channel }) => {
   const normalizedErrors = expandDottedPaths(errors);
 
@@ -511,7 +561,11 @@ export const applyErrorsToSchemaFx = effect<
         await field.setOuterErrors(errorValue);
       }
     } else if (errorValue && typeof errorValue === "object") {
-      await applyErrorsToSchemaFx({ schema: fieldOrSchema, errors: errorValue as AnyRecord, channel });
+      await applyErrorsToSchemaFx({
+        schema: fieldOrSchema,
+        errors: errorValue as AnyRecord,
+        channel,
+      });
     }
   }
 }, "forms.applyErrorsToSchema");
@@ -536,7 +590,11 @@ function expandDottedPaths(input: AnyRecord): AnyRecord {
   return result;
 }
 
-function setNestedPath(target: AnyRecord, path: readonly string[], value: unknown): void {
+function setNestedPath(
+  target: AnyRecord,
+  path: readonly string[],
+  value: unknown,
+): void {
   let cursor = target;
 
   for (let index = 0; index < path.length; index += 1) {
@@ -580,7 +638,10 @@ export function schemaIsPending(schema: AnyRecord): boolean {
   );
 }
 
-export function attachSchemaChangeValidation(schema: AnyRecord, validate: () => Promise<void>): void {
+export function attachSchemaChangeValidation(
+  schema: AnyRecord,
+  validate: () => Promise<void>,
+): void {
   for (const fieldOrSchema of Object.values(schema)) {
     if (isFieldContract(fieldOrSchema)) {
       const field = normalizeField(fieldOrSchema);
@@ -615,7 +676,9 @@ export function pickSchema(schema: AnyRecord, selection: AnyRecord): AnyRecord {
   return result;
 }
 
-function readFieldChildren(field: FieldContract<any, any, any>): Readonly<Record<string, AnyField>> {
+function readFieldChildren(
+  field: FieldContract<any, any, any>,
+): Readonly<Record<string, AnyField>> {
   if (field.readFields) {
     return field.readFields();
   }
@@ -625,7 +688,9 @@ function readFieldChildren(field: FieldContract<any, any, any>): Readonly<Record
   }
 
   if (isStoreUnit(field.fields)) {
-    return readStoreSnapshot(field.fields as Store<Readonly<Record<string, AnyField>>>);
+    return readStoreSnapshot(
+      field.fields as Store<Readonly<Record<string, AnyField>>>,
+    );
   }
 
   return field.fields;
@@ -634,21 +699,21 @@ function readFieldChildren(field: FieldContract<any, any, any>): Readonly<Record
 export function isFieldContract(value: unknown): value is AnyField {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      "kind" in value &&
-      "state" in value &&
-      "fill" in value &&
-      "reset" in value,
+    typeof value === "object" &&
+    "kind" in value &&
+    "state" in value &&
+    "fill" in value &&
+    "reset" in value,
   );
 }
 
 function isStoreUnit(value: unknown): value is AnyStore {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      "node" in value &&
-      "subscribe" in value &&
-      typeof (value as { subscribe?: unknown }).subscribe === "function",
+    typeof value === "object" &&
+    "node" in value &&
+    "subscribe" in value &&
+    typeof (value as { subscribe?: unknown }).subscribe === "function",
   );
 }
 
@@ -661,10 +726,17 @@ export function isPlainObject(value: unknown): value is AnyRecord {
   return prototype === Object.prototype || prototype === null;
 }
 
-function isArrayStoreSnapshot(unit: AnyStore, keys: readonly PropertyKey[]): boolean {
+function isArrayStoreSnapshot(
+  unit: AnyStore,
+  keys: readonly PropertyKey[],
+): boolean {
   return (
     keys.includes("length") &&
-    keys.every((key) => key === "length" || (typeof key === "string" && /^(0|[1-9]\d*)$/.test(key))) &&
+    keys.every(
+      (key) =>
+        key === "length" ||
+        (typeof key === "string" && /^(0|[1-9]\d*)$/.test(key)),
+    ) &&
     typeof Reflect.get(unit as object, "length") === "number"
   );
 }
@@ -694,12 +766,21 @@ export function deepEqual(first: unknown, second: unknown): boolean {
     return false;
   }
 
-  if (!first || !second || typeof first !== "object" || typeof second !== "object") {
+  if (
+    !first ||
+    !second ||
+    typeof first !== "object" ||
+    typeof second !== "object"
+  ) {
     return false;
   }
 
   if (Array.isArray(first) || Array.isArray(second)) {
-    if (!Array.isArray(first) || !Array.isArray(second) || first.length !== second.length) {
+    if (
+      !Array.isArray(first) ||
+      !Array.isArray(second) ||
+      first.length !== second.length
+    ) {
       return false;
     }
 
@@ -713,7 +794,9 @@ export function deepEqual(first: unknown, second: unknown): boolean {
     return false;
   }
 
-  return firstKeys.every((key) => deepEqual((first as AnyRecord)[key], (second as AnyRecord)[key]));
+  return firstKeys.every((key) =>
+    deepEqual((first as AnyRecord)[key], (second as AnyRecord)[key]),
+  );
 }
 
 export function cloneSnapshot<T>(value: T): T {

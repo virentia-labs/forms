@@ -1,4 +1,12 @@
-import { computed, effect, event, reaction, reactive, scoped, scope as createScope } from "@virentia/core";
+import {
+  computed,
+  effect,
+  event,
+  reaction,
+  reactive,
+  scoped,
+  scope as createScope,
+} from "@virentia/core";
 import { createField } from "./field";
 import {
   applyErrorsToSchemaFx,
@@ -45,7 +53,10 @@ type FunctionFormValidationConfig<
 > = Omit<CreateFormConfig<Schema, Values>, "validation"> & {
   validation?:
     | ValidationFunction<Values, PartialRecursive<SchemaErrors<Schema>>>
-    | readonly ValidationFunction<Values, PartialRecursive<SchemaErrors<Schema>>>[];
+    | readonly ValidationFunction<
+        Values,
+        PartialRecursive<SchemaErrors<Schema>>
+      >[];
 };
 
 type EffectFormValidationConfig<
@@ -54,7 +65,10 @@ type EffectFormValidationConfig<
 > = Omit<CreateFormConfig<Schema, Values>, "validation"> & {
   validation?:
     | ValidationEffect<Values, PartialRecursive<SchemaErrors<Schema>>>
-    | readonly ValidationEffect<Values, PartialRecursive<SchemaErrors<Schema>>>[];
+    | readonly ValidationEffect<
+        Values,
+        PartialRecursive<SchemaErrors<Schema>>
+      >[];
 };
 
 export function createForm<Schema extends AnyRecord>(
@@ -75,19 +89,34 @@ export function createForm<Schema extends AnyRecord>(
   const initialSnapshot = scoped(createScope(), () =>
     cloneSnapshot(readSchemaValues(fields) as SchemaValues<Schema>),
   );
-  const snapshotBox = reactive<{ initialized: boolean; value: SchemaValues<Schema> | null }>({
+  const snapshotBox = reactive<{
+    initialized: boolean;
+    value: SchemaValues<Schema> | null;
+  }>({
     initialized: true,
     value: initialSnapshot,
   });
-  const values = computed(() => readSchemaValues(fields) as SchemaValues<Schema>);
-  const value = values;
-  const innerErrors = computed(() => readSchemaErrors(fields, "innerErrors") as SchemaErrors<Schema>);
-  const outerErrors = computed(() => readSchemaErrors(fields, "outerErrors") as SchemaErrors<Schema>);
-  const errors = computed(() => readSchemaErrors(fields, "errors") as SchemaErrors<Schema>);
-  const snapshot = computed(() =>
-    snapshotBox.initialized ? (snapshotBox.value as SchemaValues<Schema>) : readStoreSnapshot(values),
+  const values = computed(
+    () => readSchemaValues(fields) as SchemaValues<Schema>,
   );
-  const isChanged = computed(() => !deepEqual(readStoreSnapshot(values), readStoreSnapshot(snapshot)));
+  const value = values;
+  const innerErrors = computed(
+    () => readSchemaErrors(fields, "innerErrors") as SchemaErrors<Schema>,
+  );
+  const outerErrors = computed(
+    () => readSchemaErrors(fields, "outerErrors") as SchemaErrors<Schema>,
+  );
+  const errors = computed(
+    () => readSchemaErrors(fields, "errors") as SchemaErrors<Schema>,
+  );
+  const snapshot = computed(() =>
+    snapshotBox.initialized
+      ? (snapshotBox.value as SchemaValues<Schema>)
+      : readStoreSnapshot(values),
+  );
+  const isChanged = computed(
+    () => !deepEqual(readStoreSnapshot(values), readStoreSnapshot(snapshot)),
+  );
   const isValid = computed(() => !hasErrors(readStoreSnapshot(errors)));
   const filled = event<SchemaValues<Schema>>("form.filled");
   const changed = event<SchemaValues<Schema>>("form.changed");
@@ -95,42 +124,69 @@ export function createForm<Schema extends AnyRecord>(
   const validated = event<SchemaValues<Schema>>("form.validated");
   const validationFailed = event<SchemaValues<Schema>>("form.validationFailed");
   const submitted = event<SchemaValues<Schema>>("form.submitted");
-  const validatedAndSubmitted = event<SchemaValues<Schema>>("form.validatedAndSubmitted");
+  const validatedAndSubmitted = event<SchemaValues<Schema>>(
+    "form.validatedAndSubmitted",
+  );
 
   // Every side effect that touches units or scope runs as an effect: the kernel
   // keeps `ctx.scope` active across each `await`, and `ctx.signal` supersedes a
   // stale validation run. Nothing reads or writes a store outside an
   // effect/reaction, so the work stays bound to the dispatch scope.
-  const validateFx = effect<void, void>(async (_payload, { scope, signal }) => {
-    const dependencies = new Set<AnyStore>();
-    const ctx = createValidationContext({ path: [], signal, dependencies, scope });
+  const validateFx = effect<void, void, Error>(
+    async (_payload, { scope, signal }) => {
+      const dependencies = new Set<AnyStore>();
+      const ctx = createValidationContext({
+        path: [],
+        signal,
+        dependencies,
+        scope,
+      });
 
-    await clearSchemaErrorsFx({ schema: fields, channel: "inner" });
-    errorsChanged(readStoreSnapshot(errors));
+      await clearSchemaErrorsFx({ schema: fields, channel: "inner" });
+      errorsChanged(readStoreSnapshot(errors));
 
-    await validateSchemaFx(fields);
+      await validateSchemaFx(fields);
 
-    const nextErrors = await runFormValidators(validators, readStoreSnapshot(values), ctx);
+      // Run the (plain-async, external-boundary) validators inside `scope`, so the
+      // ambient scope survives a multi-tick user validator (e.g. an async schema
+      // parse) and the apply/emit below run with `scope` active. Only the runner is
+      // wrapped — nested error-apply effects must stay outside, or `scoped` would
+      // gather their reactions and disturb error application / dep-tracking.
+      const nextErrors = await scoped(scope, () =>
+        runFormValidators(validators, readStoreSnapshot(values), ctx),
+      );
 
-    if (signal.aborted) {
-      return;
-    }
+      if (signal.aborted) {
+        return;
+      }
 
-    if (nextErrors) {
-      await applyErrorsToSchemaFx({ schema: fields, errors: nextErrors as AnyRecord, channel: "inner" });
-    }
+      if (nextErrors) {
+        await scoped(scope, () =>
+          applyErrorsToSchemaFx({
+            schema: fields,
+            errors: nextErrors as AnyRecord,
+            channel: "inner",
+          }),
+        );
+      }
 
-    dependencyTracker.update(scope, dependencies);
-    const nextValues = readStoreSnapshot(values);
+      // The after-work reads computeds and emits; wrap it in `scope` too, because on
+      // a detached dependency-tracker re-run there is no ambient scope here.
+      scoped(scope, () => {
+        dependencyTracker.update(scope, dependencies);
+        const nextValues = readStoreSnapshot(values);
 
-    errorsChanged(readStoreSnapshot(errors));
+        errorsChanged(readStoreSnapshot(errors));
 
-    if (readStoreSnapshot(isValid)) {
-      validated(nextValues);
-    } else {
-      validationFailed(nextValues);
-    }
-  }, "form.validate.effect");
+        if (readStoreSnapshot(isValid)) {
+          validated(nextValues);
+        } else {
+          validationFailed(nextValues);
+        }
+      });
+    },
+    "form.validate.effect",
+  );
 
   // `validate` is a plain event; the reaction below runs validation. Revalidating
   // is re-dispatching it — a direct unit await, no `async` wrapper.
@@ -148,18 +204,31 @@ export function createForm<Schema extends AnyRecord>(
   });
 
   const dependencyTracker = createValidationDependencyTracker(validate);
-  const isValidationPending = computed(() => validateFx.pending.value || schemaIsPending(fields));
+  const isValidationPending = computed(
+    () => validateFx.pending.value || schemaIsPending(fields),
+  );
 
   const fillFx = effect<
-    { values?: PartialRecursive<SchemaValues<Schema>>; errors?: PartialRecursive<SchemaErrors<Schema>> },
-    void
+    {
+      values?: PartialRecursive<SchemaValues<Schema>>;
+      errors?: PartialRecursive<SchemaErrors<Schema>>;
+    },
+    void,
+    Error
   >(async (payload) => {
     if (payload.values) {
-      await fillSchemaFx({ schema: fields, values: payload.values as AnyRecord });
+      await fillSchemaFx({
+        schema: fields,
+        values: payload.values as AnyRecord,
+      });
     }
 
     if (payload.errors) {
-      await applyErrorsToSchemaFx({ schema: fields, errors: payload.errors as AnyRecord, channel: "outer" });
+      await applyErrorsToSchemaFx({
+        schema: fields,
+        errors: payload.errors as AnyRecord,
+        channel: "outer",
+      });
     }
 
     // Dispatch every event in one synchronous block (no `await` between calls):
@@ -199,8 +268,12 @@ export function createForm<Schema extends AnyRecord>(
   }, "form.forceUpdateSnapshot.effect");
 
   const persistFx = effect<
-    { values: PartialRecursive<SchemaValues<Schema>>; errors?: PartialRecursive<SchemaErrors<Schema>> },
-    void
+    {
+      values: PartialRecursive<SchemaValues<Schema>>;
+      errors?: PartialRecursive<SchemaErrors<Schema>>;
+    },
+    void,
+    Error
   >(async (payload) => {
     await fillFx({ values: payload.values, errors: payload.errors });
     await forceUpdateSnapshotFx();
@@ -250,10 +323,15 @@ export function createForm<Schema extends AnyRecord>(
       return createForm({
         schema: pickSchema(fields, selection as AnyRecord),
         validationStrategies: config.validationStrategies,
-      }) as FormProjection<PickSchema<NormalizeSchema<Schema>, typeof selection>>;
+      }) as FormProjection<
+        PickSchema<NormalizeSchema<Schema>, typeof selection>
+      >;
     },
     serialize() {
-      return { values: readStoreSnapshot(values), errors: readStoreSnapshot(errors) };
+      return {
+        values: readStoreSnapshot(values),
+        errors: readStoreSnapshot(errors),
+      };
     },
     persist: persistFx,
     read() {
@@ -268,7 +346,9 @@ export function createForm<Schema extends AnyRecord>(
   return form;
 }
 
-function normalizeSchema<Schema extends AnyRecord>(schema: Schema): NormalizeSchema<Schema> {
+function normalizeSchema<Schema extends AnyRecord>(
+  schema: Schema,
+): NormalizeSchema<Schema> {
   const result: AnyRecord = {};
 
   for (const [key, value] of Object.entries(schema)) {

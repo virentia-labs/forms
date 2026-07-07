@@ -1,4 +1,11 @@
-import { computed, effect, event, reaction, store } from "@virentia/core";
+import {
+  computed,
+  effect,
+  event,
+  reaction,
+  scoped,
+  store,
+} from "@virentia/core";
 import { createField } from "./field";
 import {
   applyErrorsToSchemaFx,
@@ -39,67 +46,120 @@ export function createShapeField(
   const fieldsBox = store(initialFields);
   const validators = toArray(options.validate);
   const strategies = new Set(options.validationStrategies ?? []);
-  const fields = computed(() => fieldsBox.value as Readonly<Record<string, AnyField>>);
-  const state = computed(() => readObjectValues(fieldsBox.value) as ShapeValues<Record<string, AnyField>>);
+  const fields = computed(
+    () => fieldsBox.value as Readonly<Record<string, AnyField>>,
+  );
+  const state = computed(
+    () =>
+      readObjectValues(fieldsBox.value) as ShapeValues<
+        Record<string, AnyField>
+      >,
+  );
   const innerErrors = computed(
-    () => readObjectErrors(fieldsBox.value, "innerErrors") as ShapeErrors<Record<string, AnyField>>,
+    () =>
+      readObjectErrors(fieldsBox.value, "innerErrors") as ShapeErrors<
+        Record<string, AnyField>
+      >,
   );
   const outerErrors = computed(
-    () => readObjectErrors(fieldsBox.value, "outerErrors") as ShapeErrors<Record<string, AnyField>>,
+    () =>
+      readObjectErrors(fieldsBox.value, "outerErrors") as ShapeErrors<
+        Record<string, AnyField>
+      >,
   );
   const ownInnerErrorsBox = store<Record<string, unknown> | null>(null);
   const errors = computed(
     () =>
-      (ownInnerErrorsBox.value ?? readObjectErrors(fieldsBox.value, "errors")) as ShapeErrors<
+      (ownInnerErrorsBox.value ??
+        readObjectErrors(fieldsBox.value, "errors")) as ShapeErrors<
         Record<string, AnyField>
       >,
   );
   const isValid = computed(
     () =>
       !hasErrors(ownInnerErrorsBox.value) &&
-      Object.values(fieldsBox.value).every((field) => readStoreSnapshot(normalizeField(field).isValid)),
+      Object.values(fieldsBox.value).every((field) =>
+        readStoreSnapshot(normalizeField(field).isValid),
+      ),
   );
   const changed = event<Record<string, unknown>>("shapeField.changed");
-  const errorsChanged = event<Record<string, unknown>>("shapeField.errorsChanged");
+  const errorsChanged = event<Record<string, unknown>>(
+    "shapeField.errorsChanged",
+  );
   const validated = event<Record<string, unknown>>("shapeField.validated");
-  const validationFailed = event<Record<string, unknown>>("shapeField.validationFailed");
+  const validationFailed = event<Record<string, unknown>>(
+    "shapeField.validationFailed",
+  );
 
   // Effects await units one at a time in imperative order — never `Promise.all`,
   // never through an intermediate `async` helper or `.catch` that ends on an
   // effect await — so the kernel keeps this effect's scope alive across each
   // await. Schema traversal collects synchronous thunks; the effect awaits them
   // one by one.
-  const validateFx = effect<void, void>(async (_payload, { scope, signal }) => {
-    const dependencies = new Set<AnyStore>();
-    const ctx = createValidationContext({ path: [], signal, dependencies, scope });
+  const validateFx = effect<void, void, Error>(
+    async (_payload, { scope, signal }) => {
+      const dependencies = new Set<AnyStore>();
+      const ctx = createValidationContext({
+        path: [],
+        signal,
+        dependencies,
+        scope,
+      });
 
-    for (const child of Object.values(fieldsBox.value)) {
-      await normalizeField(child).validate();
-    }
+      for (const child of Object.values(fieldsBox.value)) {
+        await normalizeField(child).validate();
+      }
 
-    const nextErrors = await runFormValidators(validators, read(), ctx);
+      // Run the (plain-async, external-boundary) validators inside `scope`, so the
+      // ambient scope survives a multi-tick user validator and the apply/emit below
+      // run with `scope` active. Only the runner is wrapped — the nested error-apply
+      // effect must stay outside, or `scoped` would gather its reactions and disturb
+      // error application / dep-tracking.
+      const nextErrors = await scoped(scope, () =>
+        runFormValidators(validators, read(), ctx),
+      );
 
-    if (signal.aborted) {
-      return;
-    }
+      if (signal.aborted) {
+        return;
+      }
 
-    if (nextErrors && typeof nextErrors === "object") {
-      ownInnerErrorsBox.value = null;
-      await applyErrorsToSchemaFx({ schema: fieldsBox.value, errors: nextErrors as Record<string, unknown>, channel: "inner" });
-    } else {
-      ownInnerErrorsBox.value = (nextErrors ?? null) as Record<string, unknown> | null;
-    }
+      // The apply/read/emit after-work needs `scope` too — on a detached
+      // dependency-tracker re-run there is no ambient scope here. Wrap each nested
+      // effect call and the sync tail in their own `scoped(scope, …)` (a single
+      // `scoped(scope, async …)` block that awaits nested effects would gather their
+      // reactions and break error application).
+      if (nextErrors && typeof nextErrors === "object") {
+        await scoped(scope, () => {
+          ownInnerErrorsBox.value = null;
+          return applyErrorsToSchemaFx({
+            schema: fieldsBox.value,
+            errors: nextErrors as Record<string, unknown>,
+            channel: "inner",
+          });
+        });
+      } else {
+        scoped(scope, () => {
+          ownInnerErrorsBox.value = (nextErrors ?? null) as Record<
+            string,
+            unknown
+          > | null;
+        });
+      }
 
-    dependencyTracker.update(scope, dependencies);
+      scoped(scope, () => {
+        dependencyTracker.update(scope, dependencies);
 
-    errorsChanged(readStoreSnapshot(errors));
+        errorsChanged(readStoreSnapshot(errors));
 
-    if (readStoreSnapshot(isValid)) {
-      validated(read());
-    } else {
-      validationFailed(read());
-    }
-  }, "shapeField.validate.effect");
+        if (readStoreSnapshot(isValid)) {
+          validated(read());
+        } else {
+          validationFailed(read());
+        }
+      });
+    },
+    "shapeField.validate.effect",
+  );
 
   // `validate` is a plain event; the reaction below runs validation. Revalidating
   // is re-dispatching it — a direct unit await, no `async` wrapper.
@@ -125,34 +185,37 @@ export function createShapeField(
       ),
   );
 
-  const fillFx = effect<Record<string, unknown>, void>(async (nextValues) => {
-    const nextFields = { ...fieldsBox.value };
-    const fills: Array<() => Promise<void>> = [];
+  const fillFx = effect<Record<string, unknown>, void, Error>(
+    async (nextValues) => {
+      const nextFields = { ...fieldsBox.value };
+      const fills: Array<() => Promise<void>> = [];
 
-    for (const [key, value] of Object.entries(nextValues)) {
-      const field = nextFields[key];
+      for (const [key, value] of Object.entries(nextValues)) {
+        const field = nextFields[key];
 
-      if (field) {
-        const normalized = normalizeField(field);
-        fills.push(() => normalized.fill(value));
-      } else {
-        nextFields[key] = createShapeChild(key, value, options);
+        if (field) {
+          const normalized = normalizeField(field);
+          fills.push(() => normalized.fill(value));
+        } else {
+          nextFields[key] = createShapeChild(key, value, options);
+        }
       }
-    }
 
-    fieldsBox.value = nextFields;
+      fieldsBox.value = nextFields;
 
-    for (const fill of fills) {
-      await fill();
-    }
+      for (const fill of fills) {
+        await fill();
+      }
 
-    changed(read());
-    errorsChanged(readStoreSnapshot(errors));
+      changed(read());
+      errorsChanged(readStoreSnapshot(errors));
 
-    if (strategies.has("change")) {
-      await validate();
-    }
-  }, "shapeField.fill.effect");
+      if (strategies.has("change")) {
+        await validate();
+      }
+    },
+    "shapeField.fill.effect",
+  );
 
   const resetFx = effect<void, void>(async () => {
     fieldsBox.value = { ...initialFields };
@@ -166,13 +229,16 @@ export function createShapeField(
     errorsChanged(readStoreSnapshot(errors));
   }, "shapeField.reset.effect");
 
-  const addFx = effect<{ key: string; field: AnyField }, void>(async (payload) => {
-    fieldsBox.value = { ...fieldsBox.value, [payload.key]: payload.field };
-    changed(read());
-    errorsChanged(readStoreSnapshot(errors));
-  }, "shapeField.add.effect");
+  const addFx = effect<{ key: string; field: AnyField }, void, Error>(
+    async (payload) => {
+      fieldsBox.value = { ...fieldsBox.value, [payload.key]: payload.field };
+      changed(read());
+      errorsChanged(readStoreSnapshot(errors));
+    },
+    "shapeField.add.effect",
+  );
 
-  const removeFx = effect<string, void>(async (key) => {
+  const removeFx = effect<string, void, Error>(async (key) => {
     if (!(key in fieldsBox.value)) {
       return;
     }
@@ -183,29 +249,46 @@ export function createShapeField(
     errorsChanged(readStoreSnapshot(errors));
   }, "shapeField.remove.effect");
 
-  const replaceFx = effect<{ key: string; field: AnyField }, void>(async (payload) => {
-    fieldsBox.value = { ...fieldsBox.value, [payload.key]: payload.field };
-    changed(read());
-    errorsChanged(readStoreSnapshot(errors));
-  }, "shapeField.replace.effect");
+  const replaceFx = effect<{ key: string; field: AnyField }, void, Error>(
+    async (payload) => {
+      fieldsBox.value = { ...fieldsBox.value, [payload.key]: payload.field };
+      changed(read());
+      errorsChanged(readStoreSnapshot(errors));
+    },
+    "shapeField.replace.effect",
+  );
 
-  const clearFx = effect<void, void>(async () => {
+  const clearFx = effect<void, void, Error>(async () => {
     fieldsBox.value = {};
     ownInnerErrorsBox.value = null;
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
   }, "shapeField.clear.effect");
 
-  const setInnerErrorsFx = effect<Record<string, unknown>, void>(async (nextErrors) => {
-    ownInnerErrorsBox.value = null;
-    await applyErrorsToSchemaFx({ schema: fieldsBox.value, errors: nextErrors, channel: "inner" });
-    errorsChanged(readStoreSnapshot(errors));
-  }, "shapeField.setInnerErrors.effect");
+  const setInnerErrorsFx = effect<Record<string, unknown>, void, Error>(
+    async (nextErrors) => {
+      ownInnerErrorsBox.value = null;
+      await applyErrorsToSchemaFx({
+        schema: fieldsBox.value,
+        errors: nextErrors,
+        channel: "inner",
+      });
+      errorsChanged(readStoreSnapshot(errors));
+    },
+    "shapeField.setInnerErrors.effect",
+  );
 
-  const setOuterErrorsFx = effect<Record<string, unknown>, void>(async (nextErrors) => {
-    await applyErrorsToSchemaFx({ schema: fieldsBox.value, errors: nextErrors, channel: "outer" });
-    errorsChanged(readStoreSnapshot(errors));
-  }, "shapeField.setOuterErrors.effect");
+  const setOuterErrorsFx = effect<Record<string, unknown>, void, Error>(
+    async (nextErrors) => {
+      await applyErrorsToSchemaFx({
+        schema: fieldsBox.value,
+        errors: nextErrors,
+        channel: "outer",
+      });
+      errorsChanged(readStoreSnapshot(errors));
+    },
+    "shapeField.setOuterErrors.effect",
+  );
 
   const clearInnerErrorsFx = effect<void, void>(async () => {
     ownInnerErrorsBox.value = null;
@@ -251,7 +334,12 @@ export function createShapeField(
       return fieldsBox.value;
     },
     serialize() {
-      return { value: read(), errors: readStoreSnapshot(errors) as ShapeErrors<Record<string, AnyField>> };
+      return {
+        value: read(),
+        errors: readStoreSnapshot(errors) as ShapeErrors<
+          Record<string, AnyField>
+        >,
+      };
     },
   };
 
@@ -272,6 +360,12 @@ function normalizeShapeInput(
   );
 }
 
-function createShapeChild(key: string, value: unknown, options: CreateShapeFieldOptions): AnyField {
-  return options.createField ? options.createField(key, value) : createField(value);
+function createShapeChild(
+  key: string,
+  value: unknown,
+  options: CreateShapeFieldOptions,
+): AnyField {
+  return options.createField
+    ? options.createField(key, value)
+    : createField(value);
 }

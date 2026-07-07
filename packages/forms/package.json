@@ -1,6 +1,6 @@
 {
   "name": "@virentia/forms",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Virentia-native form models",
   "license": "MIT",
   "repository": {
@@ -34,6 +34,6 @@
     "@virentia/core": ">=0.3.0"
   },
   "devDependencies": {
-    "@virentia/core": "^0.6.1"
+    "@virentia/core": "^0.6.3"
   }
 }

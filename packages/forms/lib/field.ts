@@ -1,4 +1,4 @@
-import { computed, effect, event, reaction, store } from "@virentia/core";
+import { computed, effect, event, reaction, scoped, store } from "@virentia/core";
 import type {
   CreateFieldOptions,
   Field,
@@ -92,23 +92,33 @@ export function createField<Value, Meta extends object = Record<string, never>>(
   const validateFx = effect<void, void>(async (_payload, { scope, signal }) => {
     const dependencies = new Set<AnyStore>();
     const ctx = createValidationContext({ path: [], signal, dependencies, scope });
-    const nextError = await runFieldValidators(validators, read(), ctx);
 
-    if (signal.aborted) {
-      return;
-    }
+    // Run the whole body inside `scope`. The validators are plain-async (they await
+    // user code — an external boundary — which may suspend for several ticks, e.g.
+    // an async schema parse), and after that await the ambient scope is no longer
+    // guaranteed (it may be the base scope when a dependency-tracker reaction
+    // re-runs us detached). A leaf field's tail only writes stores and emits (no
+    // nested effects), so a single `scoped(scope, async …)` is safe here and keeps
+    // every write bound to `scope` in every path.
+    await scoped(scope, async () => {
+      const nextError = await runFieldValidators(validators, read(), ctx);
 
-    innerErrorBox.value = nextError;
-    dependencyTracker.update(scope, dependencies);
+      if (signal.aborted) {
+        return;
+      }
 
-    const nextValue = read();
-    errorsChanged(readStoreSnapshot(error));
+      innerErrorBox.value = nextError;
+      dependencyTracker.update(scope, dependencies);
 
-    if (hasErrors(nextError)) {
-      validationFailed(nextValue);
-    } else {
-      validated(nextValue);
-    }
+      const nextValue = read();
+      errorsChanged(readStoreSnapshot(error));
+
+      if (hasErrors(nextError)) {
+        validationFailed(nextValue);
+      } else {
+        validated(nextValue);
+      }
+    });
   }, "field.validate.effect");
 
   // `validate` is a plain event; the reaction below runs validation. Revalidating

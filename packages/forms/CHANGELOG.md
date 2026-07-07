@@ -1,5 +1,11 @@
 # @virentia/forms
 
+## 0.2.1
+
+### Patch Changes
+
+- refactor: bump virentia packages & move to effects / scoped
+
 ## 0.2.0
 
 ### Minor Changes

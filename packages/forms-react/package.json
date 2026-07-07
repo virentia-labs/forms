@@ -1,6 +1,6 @@
 {
   "name": "@virentia/forms-react",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "React bindings for @virentia/forms",
   "license": "MIT",
   "repository": {
@@ -36,8 +36,8 @@
   "devDependencies": {
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@virentia/core": "^0.6.1",
-    "@virentia/react": "^0.2.9",
+    "@virentia/core": "^0.6.3",
+    "@virentia/react": "^0.2.11",
     "happy-dom": "^20.9.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.6"
