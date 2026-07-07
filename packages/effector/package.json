@@ -1,0 +1,45 @@
+{
+  "name": "@virentia/forms-effector",
+  "version": "0.1.0",
+  "description": "Bridge @virentia/forms models into Effector units with an effector-kit/models-shaped lens for nested units",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/virentia-labs/forms.git",
+    "directory": "packages/effector"
+  },
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@virentia/effector": "^0.3.7",
+    "@virentia/forms": "workspace:*"
+  },
+  "peerDependencies": {
+    "@virentia/core": ">=0.3.0",
+    "effector": ">=23"
+  },
+  "devDependencies": {
+    "@virentia/core": "^0.6.1",
+    "effector": "23.4.4"
+  }
+}

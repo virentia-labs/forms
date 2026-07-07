@@ -13,9 +13,11 @@
     "paths": {
       "@virentia/core": ["../virentia/packages/core/lib/index.ts"],
       "@virentia/react": ["../virentia/packages/react/lib/index.ts"],
+      "@virentia/effector": ["../virentia/packages/effector/lib/index.ts"],
       "@virentia/forms": ["packages/forms/lib/index.ts"],
       "@virentia/forms-react": ["packages/forms-react/lib/index.ts"],
-      "@virentia/forms-zod": ["packages/forms-zod/lib/index.ts"]
+      "@virentia/forms-zod": ["packages/forms-zod/lib/index.ts"],
+      "@virentia/forms-effector": ["packages/effector/lib/index.ts"]
     }
   },
   "include": [
@@ -25,6 +27,7 @@
     "packages/*/tsdown.config.ts",
     "packages/*/vitest.config.ts",
     "../virentia/packages/core/lib/**/*.ts",
-    "../virentia/packages/react/lib/**/*.ts"
+    "../virentia/packages/react/lib/**/*.ts",
+    "../virentia/packages/effector/lib/**/*.ts"
   ]
 }
