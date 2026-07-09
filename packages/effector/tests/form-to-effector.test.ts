@@ -107,23 +107,13 @@ describe("formToEffector — collection lens (array field, read side)", () => {
 });
 
 /**
- * Dispatch direction — effector → virentia — pending.
+ * Dispatch direction — effector → virentia — now covered.
  *
- * Driving the bridged methods from the effector side (`allSettled(model.fill, …)`
- * / `scopeBind`) and the lens `target()` / `delete()` dispatchers requires
- * `@virentia/effector` to execute a fooled *virentia effect* inside the
- * associated virentia scope when triggered from effector. That runtime path does
- * not run the handler yet (a minimal `fool(virentiaEffect)` driven via
- * `allSettled` leaves the virentia store untouched), so these are specced as
- * `todo` until the `@virentia/effector` runtime lands. The read/watch direction
- * above already works and is covered.
+ * Driving the bridged methods from the effector side (`allSettled(model.fill, …)`)
+ * and the lens `target()` / `delete()` dispatchers works against the current
+ * `@virentia/effector` runtime: a fooled virentia effect executes inside the
+ * associated virentia scope when triggered from effector. Full exhaustive
+ * coverage of this direction lives in `effector-dispatch.exhaustive.test.ts`
+ * (allSettled fill/validate/reset/submit/clear, leaf `target(map)`, collection
+ * `where().delete()` / `ids().delete()` / `first()/last()/single()`).
  */
-describe("formToEffector — dispatch (effector → virentia) [pending runtime]", () => {
-  it.todo("`allSettled(model.fill, { scope, params })` updates the virentia form");
-  it.todo("`allSettled(model.validate, { scope })` populates $errors");
-  it.todo("`allSettled(model.reset, { scope })` restores the snapshot");
-  it.todo("`model.submit` validates then emits `submitted` / `validatedAndSubmitted`");
-  it.todo("`fields.email.change.target()` dispatches a value change into the form");
-  it.todo("`fields.tags.where(pred).delete()` removes the matched items");
-  it.todo("`fields.tags.first().<leaf>.target()` dispatches to the first item only");
-});
