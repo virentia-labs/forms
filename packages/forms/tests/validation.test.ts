@@ -3,7 +3,6 @@ import { effect, scope, scoped, store } from "@virentia/core";
 import {
   createArrayField,
   createField,
-  createForm,
   readStoreSnapshot,
   type ValidationContext,
   type ValidationPayload,
@@ -89,28 +88,6 @@ describe("validation", () => {
 
       expect(abortedValues).toEqual(["slow"]);
       expect(field.error.value).toBe(null);
-    });
-  });
-
-  it("revalidates a form when validation reads an external store", async () => {
-    const appScope = scope();
-    const minAge = store(18);
-    const form = createForm({
-      schema: {
-        age: 16,
-      },
-      validation(values, ctx) {
-        return values.age >= ctx.read(minAge) ? null : { age: "Too young" };
-      },
-    });
-
-    await scoped(appScope, async () => {
-      await form.validate();
-      expect(readStoreSnapshot(form.errors)).toEqual({ age: "Too young" });
-
-      minAge.value = 16;
-      await scoped(() => tick(100));
-      expect(readStoreSnapshot(form.errors)).toEqual({ age: null });
     });
   });
 

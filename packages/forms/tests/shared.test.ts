@@ -64,19 +64,19 @@ describe("readStoreSnapshot", () => {
     ).toEqual(["a", undefined, undefined]);
   });
 
-  it("treats numeric-key stores WITHOUT length as an object (edge)", () => {
+  it("treats numeric-key stores without a length as an object", () => {
     expect(
       readStoreSnapshot(asStore<Record<string, string>>({ "0": "a", "1": "b" })),
     ).toEqual({ "0": "a", "1": "b" });
   });
 
-  it("treats a non-numeric `length` as an object, not an array (edge)", () => {
+  it("treats a non-numeric `length` as an object, not an array", () => {
     expect(
       readStoreSnapshot(asStore<Record<string, unknown>>({ "0": "a", length: "2" })),
     ).toEqual({ "0": "a", length: "2" });
   });
 
-  it("treats numeric keys mixed with a non-numeric key as an object (edge)", () => {
+  it("treats numeric keys mixed with a non-numeric key as an object", () => {
     expect(
       readStoreSnapshot(
         asStore<Record<string, unknown>>({ "0": "a", x: 1, length: 1 }),
@@ -84,27 +84,27 @@ describe("readStoreSnapshot", () => {
     ).toEqual({ "0": "a", x: 1, length: 1 });
   });
 
-  it("materializes a SPARSE array store, filling gaps with undefined", () => {
+  it("materializes a sparse array store, filling gaps with undefined", () => {
     // Keys "0" and "2" present, "1" missing, length 3 -> hole reads as undefined.
     expect(
       readStoreSnapshot(asStore<unknown[]>({ "0": "a", "2": "c", length: 3 })),
     ).toEqual(["a", undefined, "c"]);
   });
 
-  it("treats a leading-zero numeric key as an object, not an array (edge)", () => {
+  it("treats a leading-zero numeric key as an object, not an array", () => {
     // "01" is not a canonical array index (regex /^(0|[1-9]\d*)$/) -> object branch.
     expect(
       readStoreSnapshot(asStore<Record<string, unknown>>({ "01": "a", length: 1 })),
     ).toEqual({ "01": "a", length: 1 });
   });
 
-  it("treats a negative numeric-looking key as an object, not an array (edge)", () => {
+  it("treats a negative numeric-looking key as an object, not an array", () => {
     expect(
       readStoreSnapshot(asStore<Record<string, unknown>>({ "-1": "a", length: 1 })),
     ).toEqual({ "-1": "a", length: 1 });
   });
 
-  it("returns entries for a plain object store (default branch)", () => {
+  it("returns entries for a plain object store", () => {
     expect(
       readStoreSnapshot(asStore<Record<string, number>>({ a: 1, b: 2 })),
     ).toEqual({ a: 1, b: 2 });
@@ -148,7 +148,7 @@ describe("readStoreSnapshot", () => {
   });
 });
 
-describe("normalizeField (cache + synthesis + read order)", () => {
+describe("normalizeField", () => {
   it("caches one stable wrapper per field instance", () => {
     const field = createField("x");
     const other = createField("y");
@@ -176,7 +176,7 @@ describe("normalizeField (cache + synthesis + read order)", () => {
     void value;
   });
 
-  it("reads via field.read, then serialize().value, then the state store (in that order)", async () => {
+  it("reads via field.read, then serialize().value, then the state store", async () => {
     const appScope = scope();
     const stateStore = store("fromstate");
     const withRead = {
@@ -209,7 +209,7 @@ describe("normalizeField (cache + synthesis + read order)", () => {
     });
   });
 
-  it("synthesizes error stores + delegating effects from children when omitted", async () => {
+  it("synthesizes a merged errors view from children, with outer overriding inner", async () => {
     const appScope = scope();
     const a = createField("x");
     const b = createField("y");
@@ -267,7 +267,7 @@ describe("normalizeField (cache + synthesis + read order)", () => {
     });
   });
 
-  it("reflects children that arrive after normalization (dynamic readFields)", async () => {
+  it("reflects children that arrive after normalization", async () => {
     const appScope = scope();
     let children: Record<string, AnyField> = {};
     const custom = {
@@ -296,7 +296,7 @@ describe("normalizeField (cache + synthesis + read order)", () => {
   });
 });
 
-describe("expandDottedPaths / dotted error merge (via form.fill)", () => {
+describe("expandDottedPaths", () => {
   it("expands a single dotted path into a nested tree", async () => {
     const appScope = scope();
     const form = createForm({ schema: { a: { b: createField("") } } });
@@ -332,16 +332,22 @@ describe("expandDottedPaths / dotted error merge (via form.fill)", () => {
     });
   });
 
-  it("FLAG G-9: dotted vs nested order changes the resulting tree on a collision", async () => {
+  it("with a dotted path before a nested object, the later nested object wins", async () => {
     const appScope = scope();
     const formA = createForm({ schema: { a: { b: createField("") } } });
-    const formB = createForm({ schema: { a: { b: createField("") } } });
 
     await scoped(appScope, async () => {
       // Order A: dotted first, then nested object -> mergePlainObjects, second wins.
       await formA.fill({ errors: { "a.b": "x", a: { b: "y" } } as never });
       expect(readStoreSnapshot(formA.errors)).toEqual({ a: { b: "y" } });
+    });
+  });
 
+  it("with a nested object before a dotted path, the later dotted path wins", async () => {
+    const appScope = scope();
+    const formB = createForm({ schema: { a: { b: createField("") } } });
+
+    await scoped(appScope, async () => {
       // Order B: nested object first, then dotted -> setNestedPath overwrites, dotted wins.
       await formB.fill({ errors: { a: { b: "y" }, "a.b": "x" } as never });
       expect(readStoreSnapshot(formB.errors)).toEqual({ a: { b: "x" } });
@@ -349,8 +355,8 @@ describe("expandDottedPaths / dotted error merge (via form.fill)", () => {
   });
 });
 
-describe("deepEqual (via form.isChanged)", () => {
-  it("treats a value re-filled with an equal primitive as unchanged (incl. NaN)", async () => {
+describe("deepEqual", () => {
+  it("treats a NaN re-filled with NaN as unchanged", async () => {
     const appScope = scope();
     const form = createForm({ schema: { n: NaN, s: "keep" } });
 
@@ -372,7 +378,7 @@ describe("deepEqual (via form.isChanged)", () => {
     });
   });
 
-  it("compares arrays by length and element", async () => {
+  it("reports a change when an array differs in length or in an element", async () => {
     const appScope = scope();
     const form = createForm({ schema: { tags: createArrayField(["a", "b"]) } });
 
@@ -401,7 +407,7 @@ describe("deepEqual (via form.isChanged)", () => {
     });
   });
 
-  it("compares nested arrays element-wise (arrays of arrays)", async () => {
+  it("compares nested arrays element-wise", async () => {
     const appScope = scope();
     const form = createForm({ schema: { matrix: [[1], [2]] } });
 
@@ -415,7 +421,7 @@ describe("deepEqual (via form.isChanged)", () => {
     });
   });
 
-  it("compares nested objects by key-count and value", async () => {
+  it("reports a change when a nested object differs in key count or value", async () => {
     const appScope = scope();
     const form = createForm({ schema: { profile: { a: 1, b: 2 } } });
 
@@ -449,8 +455,8 @@ describe("deepEqual (via form.isChanged)", () => {
   });
 });
 
-describe("cloneSnapshot (via reset / snapshot)", () => {
-  it("clones Dates into distinct-but-equal instances (deepEqual matches them by instant)", async () => {
+describe("cloneSnapshot", () => {
+  it("clones Dates into distinct-but-equal instances", async () => {
     const appScope = scope();
     const form = createForm({ schema: { d: new Date(2000, 0, 1) } });
 
@@ -467,7 +473,7 @@ describe("cloneSnapshot (via reset / snapshot)", () => {
     });
   });
 
-  it("keeps class instances as a shared reference (not cloned)", async () => {
+  it("keeps class instances as a shared reference", async () => {
     const appScope = scope();
     class Point {
       constructor(public x: number) {}
@@ -499,7 +505,7 @@ describe("cloneSnapshot (via reset / snapshot)", () => {
     });
   });
 
-  it("restores a deep-equal baseline through reset (arrays + nested objects)", async () => {
+  it("restores a deep-equal baseline through reset", async () => {
     const appScope = scope();
     const form = createForm({
       schema: { tags: createArrayField(["a"]), profile: { city: "" } },
@@ -517,8 +523,8 @@ describe("cloneSnapshot (via reset / snapshot)", () => {
   });
 });
 
-describe("hasErrors (via isValid)", () => {
-  it("treats null / undefined as no error but every other scalar as an error (FLAG G-12)", async () => {
+describe("hasErrors", () => {
+  it("counts only null and undefined as no error, flagging every present scalar", async () => {
     const appScope = scope();
     const errorsBox = store<unknown>(null);
     const custom = {
@@ -538,7 +544,7 @@ describe("hasErrors (via isValid)", () => {
 
       expect(validFor(null)).toBe(true);
       expect(validFor(undefined)).toBe(true);
-      // Falsy-but-present scalars still count as errors (G-12).
+      // Falsy-but-present scalars still count as errors.
       expect(validFor("")).toBe(false);
       expect(validFor(0)).toBe(false);
       expect(validFor(false)).toBe(false);
@@ -546,7 +552,7 @@ describe("hasErrors (via isValid)", () => {
     });
   });
 
-  it("walks arrays and objects, flagging any errored leaf", async () => {
+  it("flags an errored leaf anywhere in a nested array or object tree", async () => {
     const appScope = scope();
     const errorsBox = store<unknown>(null);
     const custom = {
@@ -574,7 +580,7 @@ describe("hasErrors (via isValid)", () => {
     });
   });
 
-  it("treats empty arrays and empty objects as having no errors (valid)", async () => {
+  it("treats an empty array or object as having no errors", async () => {
     const appScope = scope();
     const errorsBox = store<unknown>(null);
     const custom = {
@@ -621,8 +627,8 @@ describe("hasErrors (via isValid)", () => {
   });
 });
 
-describe("pickSchema (via form.pick)", () => {
-  it("selects whole leaf fields, recurses into object selections, and skips unknown keys", async () => {
+describe("pickSchema", () => {
+  it("projects selected leaves and nested selections, dropping unknown keys", async () => {
     const appScope = scope();
     const form = createForm({
       schema: {
@@ -673,7 +679,7 @@ describe("pickSchema (via form.pick)", () => {
 });
 
 describe("scope invariants", () => {
-  it("createValidationContext.read reads under the validation scope (per-scope value + revalidation)", async () => {
+  it("createValidationContext.read reads a tracked store under each scope's own value", async () => {
     const scopeA = scope();
     const scopeB = scope();
     const minAge = store(18);
@@ -745,7 +751,7 @@ describe("scope invariants", () => {
     expect(getCurrentScope()).toBe(null);
   });
 
-  it("runs change-strategy validation under scope without leaking (emitIn keeps scope sync-only)", async () => {
+  it("runs change-strategy validation under scope without leaking", async () => {
     const appScope = scope();
     const form = createForm({
       schema: { name: "" },
@@ -765,7 +771,7 @@ describe("scope invariants", () => {
     expect(getCurrentScope()).toBe(null);
   });
 
-  it("a superseded (aborted) validation writes nothing and emits nothing", async () => {
+  it("ignores a superseded validation's stale result", async () => {
     const appScope = scope();
     const slow = deferred<string | null>();
     const fast = deferred<string | null>();
@@ -841,7 +847,7 @@ describe("scope invariants", () => {
     });
   });
 
-  it("isolates a single field's value AND error across two scopes", async () => {
+  it("isolates a single field's value and error across two scopes", async () => {
     const scopeA = scope();
     const scopeB = scope();
     const field = createField("base");

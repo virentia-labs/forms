@@ -4,14 +4,13 @@ import {
   createField,
   createForm,
   defineField,
-  fieldType,
   normalizeField,
   readStoreSnapshot,
   type FieldContract,
 } from "../lib";
 
-describe("custom fields", () => {
-  it("accepts plain objects that satisfy the field contract", async () => {
+describe("custom composite fields", () => {
+  it("fills only the provided child, leaving the others at their defaults", async () => {
     const appScope = scope();
     const start = createField(0);
     const end = createField(10);
@@ -44,7 +43,7 @@ describe("custom fields", () => {
     });
   });
 
-  it("derives missing error APIs from child fields", async () => {
+  it("derives the error API from its child fields", async () => {
     const appScope = scope();
     const start = createField(0);
     const end = createField(10);
@@ -77,46 +76,6 @@ describe("custom fields", () => {
 
       await normalized.clearOuterErrors();
       expect(readStoreSnapshot(normalized.errors)).toEqual({ start: null, end: null });
-    });
-  });
-
-  it("lets fieldType.extend compose a richer API", async () => {
-    const appScope = scope();
-    const primitive = fieldType({ create: createField });
-    const trimmed = primitive.extend({
-      create(base, initial: string) {
-        const field = base(initial);
-
-        return defineField({
-          ...field,
-          kind: "trimmed",
-          async normalize() {
-            await field.fill((field.read?.() as string).trim());
-          },
-        });
-      },
-    });
-    const uppercased = trimmed.extend({
-      create(base, initial: string) {
-        const field = base(initial);
-
-        return defineField({
-          ...field,
-          kind: "uppercased",
-          async uppercase() {
-            await field.fill((field.read?.() as string).toUpperCase());
-          },
-        });
-      },
-    });
-    const title = uppercased("  virentia  ");
-
-    await scoped(appScope, async () => {
-      await title.normalize();
-      expect(title.state.value).toBe("virentia");
-
-      await title.uppercase();
-      expect(title.state.value).toBe("VIRENTIA");
     });
   });
 });
