@@ -1,6 +1,7 @@
 import {
   effect as virentiaEffect,
   event as virentiaEvent,
+  getCurrentScope,
   owner,
   reaction,
   scope as createScope,
@@ -205,6 +206,18 @@ function readBase<T>(store: VirentiaStore<T>): T {
   return scoped(createScope(), () => readStoreSnapshot(store));
 }
 
+/**
+ * Read a store in the current ambient scope when there is one (e.g. inside
+ * `scoped(...)`/`drive(...)` or a fooled virentia effect running in the
+ * associated scope), otherwise fall back to its base value. Reading through a
+ * fresh throwaway scope (`readBase`) always yields the initial value, so
+ * scoped-side reads (`getSource()` under `drive`) would never see later
+ * mutations; this keeps them current without throwing when no scope is active.
+ */
+function readCurrent<T>(store: VirentiaStore<T>): T {
+  return getCurrentScope() ? readStoreSnapshot(store) : readBase(store);
+}
+
 /** Navigate a lens path (child-field keys, then a terminal unit) on one item. */
 function resolveLeafUnit(item: AnyField, path: string[]): AnyVirentiaUnit | null {
   let field: AnyField = item;
@@ -278,7 +291,7 @@ function collectionClock(config: CollectionConfig, path: string[]) {
       return disposers;
     };
 
-    let disposers = subscribe(readBase);
+    let disposers = subscribe(readCurrent);
     reaction({
       on: config.changed,
       run() {
@@ -293,11 +306,16 @@ function collectionClock(config: CollectionConfig, path: string[]) {
   };
 }
 
+/** Keys that would make the lens masquerade as a promise/thenable. */
+function isThenableTrap(key: string): boolean {
+  return key === "then" || key === "catch" || key === "finally";
+}
+
 /** Build the recursive, proxy-backed collection lens for a config + path. */
 function buildCollectionLens(config: CollectionConfig, path: string[]): unknown {
   const ops: Record<string, unknown> = {
     getSource() {
-      return Object.fromEntries(resolveMatched(config, readBase));
+      return Object.fromEntries(resolveMatched(config, readCurrent));
     },
     ids(...ids: string[]) {
       const set = new Set(ids);
@@ -343,6 +361,13 @@ function buildCollectionLens(config: CollectionConfig, path: string[]): unknown 
       if (typeof key !== "string") {
         return Reflect.get(target, key);
       }
+      // The lens is not a promise. If we navigated `then`/`catch`/`finally` into
+      // a sub-lens, returning that (truthy) sub-lens would make the lens look
+      // thenable — `scoped()`/`await` inspect `then`, so returning a lens from a
+      // scoped block would wrap it in a Promise. Refuse those keys outright.
+      if (isThenableTrap(key)) {
+        return undefined;
+      }
       // Selection operators and terminals live directly on `ops`; at the root of
       // the path `clock`/`target` are not yet meaningful, so only expose them
       // once a leaf has been navigated to.
@@ -356,7 +381,10 @@ function buildCollectionLens(config: CollectionConfig, path: string[]): unknown 
       return buildCollectionLens(config, [...path, key]);
     },
     has(target, key) {
-      return typeof key === "string" ? true : Reflect.has(target, key);
+      if (typeof key === "string") {
+        return isThenableTrap(key) ? false : true;
+      }
+      return Reflect.has(target, key);
     },
   });
 }
