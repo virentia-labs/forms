@@ -51,7 +51,6 @@ export function normalizeField<Value, Errors, Fill>(
 
   const readFields = () => readFieldChildren(field);
   const hasChildren = () => Object.keys(readFields()).length > 0;
-  const emptyErrors = computed(() => null as Errors);
   const childrenErrors = computed(
     () => readObjectErrors(readFields(), "errors") as Errors,
   );
@@ -61,11 +60,22 @@ export function normalizeField<Value, Errors, Fill>(
   const childrenOuterErrors = computed(
     () => readObjectErrors(readFields(), "outerErrors") as Errors,
   );
-  const errors = field.errors ?? (hasChildren() ? childrenErrors : emptyErrors);
+  // Decide children-vs-empty on every read, not once at normalize time: a field
+  // whose children arrive after normalization (dynamic `readFields`) must start
+  // surfacing their errors instead of being frozen to a permanent `null`.
+  const errors =
+    field.errors ??
+    computed(() => (hasChildren() ? childrenErrors.value : (null as Errors)));
   const innerErrors =
-    field.innerErrors ?? (hasChildren() ? childrenInnerErrors : emptyErrors);
+    field.innerErrors ??
+    computed(() =>
+      hasChildren() ? childrenInnerErrors.value : (null as Errors),
+    );
   const outerErrors =
-    field.outerErrors ?? (hasChildren() ? childrenOuterErrors : emptyErrors);
+    field.outerErrors ??
+    computed(() =>
+      hasChildren() ? childrenOuterErrors.value : (null as Errors),
+    );
   const changed = field.changed ?? event<Value>(`${field.kind}.changed`);
   const errorsChanged =
     field.errorsChanged ?? event<Errors>(`${field.kind}.errorsChanged`);
@@ -773,6 +783,17 @@ export function deepEqual(first: unknown, second: unknown): boolean {
     typeof second !== "object"
   ) {
     return false;
+  }
+
+  // Dates have no own enumerable keys, so the key-count comparison below would
+  // treat every pair of Dates as equal. Compare them by instant instead, the
+  // same way `cloneSnapshot` reconstructs them (`new Date(getTime())`).
+  if (first instanceof Date || second instanceof Date) {
+    return (
+      first instanceof Date &&
+      second instanceof Date &&
+      first.getTime() === second.getTime()
+    );
   }
 
   if (Array.isArray(first) || Array.isArray(second)) {

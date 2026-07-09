@@ -141,6 +141,13 @@ export function createArrayField<
         const itemErrors = nextError as readonly unknown[];
         const currentItems = itemsBox.value;
         for (let index = 0; index < currentItems.length; index += 1) {
+          // An error array shorter than the item list (or a hole) does not address
+          // the trailing items — leave their own validation result intact instead
+          // of overwriting it with a phantom `undefined` (which reads as invalid).
+          if (itemErrors[index] === undefined) {
+            continue;
+          }
+
           await scoped(scope, () =>
             normalizeField(currentItems[index]).setInnerErrors(
               itemErrors[index],
@@ -348,6 +355,13 @@ export function createArrayField<
       const itemErrors = nextErrors as readonly unknown[];
       const currentItems = itemsBox.value;
       for (let index = 0; index < currentItems.length; index += 1) {
+        // Entries the array does not cover (or explicit holes) leave the
+        // corresponding item untouched rather than injecting a phantom
+        // `undefined` error that would make the item report invalid.
+        if (itemErrors[index] === undefined) {
+          continue;
+        }
+
         await normalizeField(currentItems[index]).setInnerErrors(
           itemErrors[index],
         );
@@ -369,6 +383,13 @@ export function createArrayField<
       const itemErrors = nextErrors as readonly unknown[];
       const currentItems = itemsBox.value;
       for (let index = 0; index < currentItems.length; index += 1) {
+        // Entries the array does not cover (or explicit holes) leave the
+        // corresponding item untouched rather than injecting a phantom
+        // `undefined` error that would make the item report invalid.
+        if (itemErrors[index] === undefined) {
+          continue;
+        }
+
         await normalizeField(currentItems[index]).setOuterErrors(
           itemErrors[index],
         );
