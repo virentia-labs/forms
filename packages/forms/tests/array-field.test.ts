@@ -320,6 +320,25 @@ describe("createArrayField", () => {
       });
     });
 
+    it("clamps a negative target to the front, moving a non-zero source to index 0", async () => {
+      const appScope = scope();
+      const tags = createArrayField(["a", "b", "c"]);
+
+      await scoped(appScope, async () => {
+        const [, , ic] = readStoreSnapshot(tags.items);
+
+        // a negative `to` clamps to 0: the source at index 2 lands at the front
+        await tags.move(2, -5);
+        expect(readStoreSnapshot(tags.state)).toEqual(["c", "a", "b"]);
+        // and it is the same instance, now at index 0
+        expect(readStoreSnapshot(tags.items)[0]).toBe(ic);
+
+        // a middle source with a large negative `to` also lands at the front
+        await tags.move(1, -100);
+        expect(readStoreSnapshot(tags.state)).toEqual(["a", "c", "b"]);
+      });
+    });
+
     it("move of an index onto itself re-emits changed with unchanged order and preserved identity", async () => {
       const appScope = scope();
       const tags = createArrayField(["a", "b", "c"]);
