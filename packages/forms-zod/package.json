@@ -37,7 +37,7 @@
     "zod": ">=4"
   },
   "devDependencies": {
-    "@virentia/core": "^0.6.3",
+    "@virentia/core": "^0.7.0",
     "zod": "4.4.3"
   }
 }

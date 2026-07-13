@@ -648,22 +648,18 @@ describe("formToEffector — read direction (virentia → effector)", () => {
     });
 
     /**
-     * BUG PIN (see bugsSuspected: collection-clock-never-fires).
-     *
      * `fields.<array-leaf>.clock()` builds a re-subscribing reaction over the
-     * matched items (collectionClock). The initial subscription resolves items via
-     * `readBase` (a throwaway scope), so the reactions are bound to base-scope item
-     * instances and never observe value changes made in the paired virentia scope —
-     * the resubscribe-on-membership-change path is likewise ineffective. The result
-     * is that the collection leaf `clock()` emits NOTHING when an item's value
-     * changes, even though the bridged `$values` store (via `fool` on the form's
-     * values) correctly reflects that same change.
+     * matched items (collectionClock) and emits the item's new value whenever
+     * that item changes — matching the plain leaf-field `state.clock()` and the
+     * bridged `$values` store.
      *
-     * Contrast with the plain leaf-field `state.clock()`, which fires (see the
-     * "leaf field lens units" suite). We pin the current (non-firing)
-     * behavior GREEN rather than assert the intended effector-kit/models semantics.
+     * Previously pinned as a bug (`collection-clock-never-fires`): the initial
+     * subscription resolved items in a throwaway scope, so the reactions bound to
+     * base-scope instances and never observed value changes made in the paired
+     * virentia scope. Fixed upstream in @virentia/core 0.7.0 / @virentia/effector
+     * 0.4.0 — the collection leaf clock now fires.
      */
-    it("collection leaf `clock()` does NOT fire on an item value change — while $values does", async () => {
+    it("collection leaf `clock()` fires on an item value change — like $values", async () => {
       const h = setupForm(createForm({ schema: { tags: createArrayField<string>(["a", "b"]) } }));
       const clock = h.drive(() => (h.model.fields as any).tags.state.clock()) as Event<string>;
       const $seen = createStore<string[]>([]).on(clock, (log, v) => [...log, v]);
@@ -675,8 +671,8 @@ describe("formToEffector — read direction (virentia → effector)", () => {
       await h.drive(() => tick(5));
       // The mirrored store observed the mutation…
       expect(h.read(h.model.$values)).toEqual({ tags: ["Z", "b"] });
-      // …but the collection leaf clock produced no events (the pinned behavior).
-      expect(h.read($seen)).toEqual([]);
+      // …and the collection leaf clock emitted the changed value.
+      expect(h.read($seen)).toEqual(["Z"]);
     });
   });
 
