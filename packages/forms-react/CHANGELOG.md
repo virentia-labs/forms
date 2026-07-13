@@ -1,5 +1,13 @@
 # @virentia/forms-react
 
+## 0.2.2
+
+### Patch Changes
+
+- fix: bump virentia
+- Updated dependencies
+  - @virentia/forms@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes

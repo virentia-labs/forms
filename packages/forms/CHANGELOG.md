@@ -1,5 +1,11 @@
 # @virentia/forms
 
+## 0.2.2
+
+### Patch Changes
+
+- fix: bump virentia
+
 ## 0.2.1
 
 ### Patch Changes
