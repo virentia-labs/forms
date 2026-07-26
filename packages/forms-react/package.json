@@ -1,6 +1,6 @@
 {
   "name": "@virentia/forms-react",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "React bindings for @virentia/forms",
   "license": "MIT",
   "repository": {
