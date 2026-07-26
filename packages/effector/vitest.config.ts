@@ -34,5 +34,8 @@ export default defineConfig({
     cache: false,
     singleThread: true,
     include: ["tests/**/*.test.ts"],
+    typecheck: {
+      include: ["tests/**/*.test-d.ts"],
+    },
   },
 });

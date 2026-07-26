@@ -14,5 +14,8 @@ export default defineConfig({
     environment: "happy-dom",
     singleThread: true,
     include: ["tests/**/*.test.tsx"],
+    typecheck: {
+      include: ["tests/**/*.test-d.ts"],
+    },
   },
 });
