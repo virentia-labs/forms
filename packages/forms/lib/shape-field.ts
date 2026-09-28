@@ -68,16 +68,19 @@ export function createShapeField(
       >,
   );
   const ownInnerErrorsBox = store<Record<string, unknown> | null>(null);
-  const errors = computed(
-    () =>
-      (ownInnerErrorsBox.value ??
-        readObjectErrors(fieldsBox.value, "errors")) as ShapeErrors<
-        Record<string, AnyField>
-      >,
-  );
+  const errors = computed(() => {
+    // Core 0.11.1 needs these child channels tracked explicitly to invalidate
+    // the aggregate when a later validation clears a distributed error.
+    readStoreSnapshot(innerErrors);
+    readStoreSnapshot(outerErrors);
+    return (ownInnerErrorsBox.value ??
+      readObjectErrors(fieldsBox.value, "errors")) as ShapeErrors<
+      Record<string, AnyField>
+    >;
+  });
   const isValid = computed(
     () =>
-      !hasErrors(ownInnerErrorsBox.value) &&
+      !hasErrors(readStoreSnapshot(errors)) &&
       Object.values(fieldsBox.value).every((field) =>
         readStoreSnapshot(normalizeField(field).isValid),
       ),

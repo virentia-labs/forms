@@ -15,11 +15,11 @@ importers:
         specifier: ^19.2.7
         version: 19.2.14
       '@virentia/core':
-        specifier: ^0.9.0
-        version: 0.9.0
+        specifier: ^0.11.1
+        version: 0.11.1
       '@virentia/react':
-        specifier: ^0.4.1
-        version: 0.4.1(react@19.2.6)
+        specifier: ^0.5.1
+        version: 0.5.1(react@19.2.6)
       react:
         specifier: ^19.2.1
         version: 19.2.6
@@ -39,15 +39,15 @@ importers:
   packages/effector:
     dependencies:
       '@virentia/effector':
-        specifier: ^0.5.1
-        version: 0.5.1(effector@23.4.4)
+        specifier: ^0.5.4
+        version: 0.5.4(effector@23.4.4)
       '@virentia/forms':
         specifier: workspace:*
         version: link:../forms
     devDependencies:
       '@virentia/core':
-        specifier: ^0.9.0
-        version: 0.9.0
+        specifier: ^0.11.1
+        version: 0.11.1
       effector:
         specifier: 23.4.4
         version: 23.4.4
@@ -55,8 +55,8 @@ importers:
   packages/forms:
     devDependencies:
       '@virentia/core':
-        specifier: ^0.9.0
-        version: 0.9.0
+        specifier: ^0.11.1
+        version: 0.11.1
 
   packages/forms-react:
     dependencies:
@@ -71,11 +71,11 @@ importers:
         specifier: ^14.6.1
         version: 14.6.1(@testing-library/dom@10.4.1)
       '@virentia/core':
-        specifier: ^0.9.0
-        version: 0.9.0
+        specifier: ^0.11.1
+        version: 0.11.1
       '@virentia/react':
-        specifier: ^0.4.1
-        version: 0.4.1(react@19.2.6)
+        specifier: ^0.5.1
+        version: 0.5.1(react@19.2.6)
       happy-dom:
         specifier: ^20.9.0
         version: 20.9.0
@@ -93,8 +93,8 @@ importers:
         version: link:../forms
     devDependencies:
       '@virentia/core':
-        specifier: ^0.9.0
-        version: 0.9.0
+        specifier: ^0.11.1
+        version: 0.11.1
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -694,16 +694,21 @@ packages:
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
-  '@virentia/core@0.9.0':
-    resolution: {integrity: sha512-mo1A4o6tnI6IUGgrY0IEg4+uqBLpTuPO8QBz1c/1BBUFcQezbdC9Vsrmfe56opPqQb9KI54F2SF6ulXRaQOn9g==}
+  '@virentia/core@0.11.1':
+    resolution: {integrity: sha512-BXPf9PQbRYIaPwZ9S8znt5cBDN0h0nmqNI7n2/IcZhloCrTYu45eOspx6PBW6JTPBSfnfEw+7jPDsmd7n6yCvQ==}
+    peerDependencies:
+      '@sinclair/typebox': ^0.34.52
+    peerDependenciesMeta:
+      '@sinclair/typebox':
+        optional: true
 
-  '@virentia/effector@0.5.1':
-    resolution: {integrity: sha512-4NycVSGRqC1bcEFPkJ9/55er6VTaD+BHr/5drsTzrMjmbvg/S/17qvDtG0TL3fEBLSGGqYIlHZBY6mWeV+3Eqw==}
+  '@virentia/effector@0.5.4':
+    resolution: {integrity: sha512-5EuaIM2YtV15OTPjAXp5p1yP6uNUfz/HsCYz9Ydz2YYBCd1SHBMLs2X78lpat8QfaU7gnYEESGBl1VPWF2k7rg==}
     peerDependencies:
       effector: ^23.0.0
 
-  '@virentia/react@0.4.1':
-    resolution: {integrity: sha512-l2iRteK4OhkSB5tyvpXwbsrXq05XkRqp7cP3b8F4RVbypSJJonfW5Tcx/3CjZ4lzju6ZwLPIr4JcvT20Usk8tw==}
+  '@virentia/react@0.5.1':
+    resolution: {integrity: sha512-JZ/pMOXK2Gded5WVJnTlgSeaxICdsW1rwhX7Q3lL4K1l83brVpIqeCn0DZiqL/tagbIwTSpEgN9a5j4xy05ogA==}
     peerDependencies:
       react: '>=18'
 
@@ -1971,17 +1976,21 @@ snapshots:
     dependencies:
       '@types/node': 25.8.0
 
-  '@virentia/core@0.9.0': {}
+  '@virentia/core@0.11.1': {}
 
-  '@virentia/effector@0.5.1(effector@23.4.4)':
+  '@virentia/effector@0.5.4(effector@23.4.4)':
     dependencies:
-      '@virentia/core': 0.9.0
+      '@virentia/core': 0.11.1
       effector: 23.4.4
+    transitivePeerDependencies:
+      - '@sinclair/typebox'
 
-  '@virentia/react@0.4.1(react@19.2.6)':
+  '@virentia/react@0.5.1(react@19.2.6)':
     dependencies:
-      '@virentia/core': 0.9.0
+      '@virentia/core': 0.11.1
       react: 19.2.6
+    transitivePeerDependencies:
+      - '@sinclair/typebox'
 
   '@vitest/expect@0.34.6':
     dependencies:

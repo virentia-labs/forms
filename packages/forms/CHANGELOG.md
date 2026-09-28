@@ -1,5 +1,11 @@
 # @virentia/forms
 
+## 0.2.4
+
+### Patch Changes
+
+- Update Virentia dependencies to core 0.11.1, react 0.5.1, and effector 0.5.4.
+
 ## 0.2.3
 
 ### Patch Changes
