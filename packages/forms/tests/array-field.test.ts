@@ -835,7 +835,7 @@ describe("createArrayField", () => {
         const first = tags.validate();
         // Deterministically wait until the first run has entered the array
         // validator and registered its abort listener before superseding it.
-        await reachedSlow.promise;
+        await scoped(appScope, () => reachedSlow.promise);
         await tags.fill(["fast"]);
         const second = tags.validate();
 

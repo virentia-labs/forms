@@ -8,6 +8,8 @@ import {
   type Store,
 } from "@virentia/core";
 import { createField } from "./field";
+import { arrayModelState } from "./collection-state";
+import { trackFieldRevisions, type FieldCell } from "./field-state";
 import {
   clampIndex,
   createValidationContext,
@@ -17,6 +19,8 @@ import {
   ignoreAbort,
   isFieldContract,
   normalizeField,
+  modelFieldValue,
+  modelCollectionFields,
   readArrayErrors,
   readArrayValue,
   readStoreSnapshot,
@@ -41,24 +45,28 @@ export function createArrayField<
   initial: readonly Value[] = [],
   options: CreateArrayFieldOptions<Value, ItemField> = {},
 ): ArrayField<Value, ItemField> {
+  const cells = arrayModelState();
   const createItem =
-    options.createItem ??
+    (cells?.createItem as typeof options.createItem) ?? options.createItem ??
     ((value: Value) => createField(value) as unknown as ItemField);
   const validators = toArray(options.validate);
   const strategies = new Set(options.validationStrategies ?? []);
-  const itemsBox = store(
+  const itemsBox = (cells?.items as FieldCell<readonly ItemField[]> | undefined) ?? store(
     initial.map((value, index) => createItem(value, index)),
   );
-  const innerErrorBox = store<FieldError>(null);
-  const outerErrorBox = store<FieldError>(null);
-  const items = computed(() => itemsBox.value as readonly ItemField[]);
+  const innerErrorBox = cells?.innerError ?? store<FieldError>(null);
+  const outerErrorBox = cells?.outerError ?? store<FieldError>(null);
+  const items = computed(() => modelCollectionFields(itemsBox.value));
   const itemFields = computed(
     () =>
       Object.fromEntries(
-        itemsBox.value.map((field, index) => [String(index), field]),
+        modelCollectionFields(itemsBox.value).map((field, index) => [String(index), field]),
       ) as Readonly<Record<string, ItemField>>,
   );
-  const state = computed(() => readArrayValue<Value>(itemsBox.value));
+  const state = computed(() => {
+    if (cells) { void cells.revision.value; trackFieldRevisions(itemsBox.value); }
+    return readArrayValue<Value>(itemsBox.value);
+  });
   const fields = itemFields as Store<Readonly<Record<string, AnyField>>>;
   const length = computed(() => itemsBox.value.length);
   const innerErrors = computed(
@@ -216,6 +224,7 @@ export function createArrayField<
     for (const fill of fills) {
       await fill();
     }
+    if (cells) await cells.commit();
 
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
@@ -226,13 +235,14 @@ export function createArrayField<
   }, "arrayField.fill.effect");
 
   const resetFx = effect<void, void>(async () => {
-    itemsBox.value = initial.map((item, index) => createItem(item, index));
+    itemsBox.value = cells ? await cells.initialItems() as readonly ItemField[] : initial.map((item, index) => createItem(item, index));
     innerErrorBox.value = null;
     outerErrorBox.value = null;
 
     for (const field of itemsBox.value) {
       await normalizeField(field).reset();
     }
+    if (cells) await cells.commit();
 
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
@@ -243,12 +253,14 @@ export function createArrayField<
       ...itemsBox.value,
       toArrayItem(input, itemsBox.value.length),
     ];
+    if (cells) await cells.commit();
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
   }, "arrayField.push.effect");
 
   const unshiftFx = effect<Value | ItemField, void, Error>(async (input) => {
     itemsBox.value = [toArrayItem(input, 0), ...itemsBox.value];
+    if (cells) await cells.commit();
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
   }, "arrayField.unshift.effect");
@@ -262,6 +274,7 @@ export function createArrayField<
     const next = itemsBox.value.slice();
     next.splice(safeIndex, 0, toArrayItem(input, safeIndex));
     itemsBox.value = next;
+    if (cells) await cells.commit();
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
   }, "arrayField.insert.effect");
@@ -274,6 +287,7 @@ export function createArrayField<
     const next = itemsBox.value.slice();
     next.splice(index, 1);
     itemsBox.value = next;
+    if (cells) await cells.commit();
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
   }, "arrayField.remove.effect");
@@ -297,6 +311,7 @@ export function createArrayField<
     } else {
       await normalizeField(current).fill(input);
     }
+    if (cells) await cells.commit();
 
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
@@ -313,6 +328,7 @@ export function createArrayField<
       const [field] = next.splice(from, 1);
       next.splice(safeTo, 0, field);
       itemsBox.value = next;
+      if (cells) await cells.commit();
       changed(read());
       errorsChanged(readStoreSnapshot(errors));
     },
@@ -331,6 +347,7 @@ export function createArrayField<
       const next = itemsBox.value.slice();
       [next[first], next[second]] = [next[second], next[first]];
       itemsBox.value = next;
+      if (cells) await cells.commit();
       changed(read());
       errorsChanged(readStoreSnapshot(errors));
     },
@@ -341,6 +358,7 @@ export function createArrayField<
     itemsBox.value = [];
     innerErrorBox.value = null;
     outerErrorBox.value = null;
+    if (cells) await cells.commit();
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
   }, "arrayField.clear.effect");
@@ -458,7 +476,10 @@ export function createArrayField<
     },
   };
 
-  return field;
+  if (cells) {
+    reaction({ on: changed, run() { cells.revision.value++; } });
+  }
+  return modelFieldValue(field);
 
   function read(): readonly Value[] {
     return readArrayValue(itemsBox.value);

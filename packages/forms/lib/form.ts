@@ -1,22 +1,25 @@
+import { applyErrorsToSchemaFx, clearSchemaErrorsFx, fillSchemaFx, resetSchemaFx, validateSchemaFx } from "./schema-effects";
 import {
   computed,
   effect,
   event,
+  getOwner,
+  getCurrentScope,
   reaction,
   reactive,
   scoped,
   scope as createScope,
+  type Scope,
 } from "@virentia/core";
+import { getModelSetupContext, scopedModelValue, unwrapMicroScope } from "@virentia/core/internal";
+import { modelSchema } from "./model-schema";
 import { createField } from "./field";
 import {
-  applyErrorsToSchemaFx,
   attachSchemaChangeValidation,
-  clearSchemaErrorsFx,
   cloneSnapshot,
   createValidationContext,
   createValidationDependencyTracker,
   deepEqual,
-  fillSchemaFx,
   hasErrors,
   ignoreAbort,
   isFieldContract,
@@ -25,17 +28,16 @@ import {
   readSchemaErrors,
   readSchemaValues,
   readStoreSnapshot,
-  resetSchemaFx,
   runFormValidators,
   schemaIsPending,
   toArray,
-  validateSchemaFx,
   type AnyRecord,
   type AnyStore,
 } from "./shared";
 import type {
   CreateFormConfig,
   Form,
+  ModelForm,
   FormProjection,
   NormalizeSchema,
   PartialRecursive,
@@ -72,6 +74,15 @@ type EffectFormValidationConfig<
 };
 
 export function createForm<Schema extends AnyRecord>(
+  config: Omit<FunctionFormValidationConfig<Schema>, "schema"> & { schema: () => Schema },
+): ModelForm<Schema>;
+export function createForm<Schema extends AnyRecord>(
+  config: Omit<EffectFormValidationConfig<Schema>, "schema"> & { schema: () => Schema },
+): ModelForm<Schema>;
+export function createForm<Schema extends AnyRecord>(
+  config: Omit<CreateFormConfig<Schema>, "schema"> & { schema: () => Schema },
+): ModelForm<Schema>;
+export function createForm<Schema extends AnyRecord>(
   config: FunctionFormValidationConfig<Schema>,
 ): Form<Schema>;
 export function createForm<Schema extends AnyRecord>(
@@ -81,21 +92,35 @@ export function createForm<Schema extends AnyRecord>(
   config: CreateFormConfig<Schema>,
 ): Form<Schema>;
 export function createForm<Schema extends AnyRecord>(
-  config: CreateFormConfig<Schema>,
-): Form<Schema> {
-  const fields = normalizeSchema(config.schema) as NormalizeSchema<Schema>;
+  config: Omit<CreateFormConfig<Schema>, "schema"> & { schema: Schema | (() => Schema) },
+): Form<Schema> | ModelForm<Schema> {
+  const setup = getModelSetupContext();
+  const dynamic = typeof config.schema === "function" ? modelSchema(config.schema as () => AnyRecord) : undefined;
+  if (dynamic && !setup) throw new Error("[forms] A schema function must be declared inside model/staticModel.setup");
+  const fields = (dynamic?.schema ?? normalizeSchema(config.schema as Schema)) as NormalizeSchema<Schema>;
   const validators = toArray(config.validation);
   const strategies = new Set(config.validationStrategies ?? []);
-  const initialSnapshot = scoped(createScope(), () =>
+  const initialSnapshot = dynamic ? null : scoped(createScope(), () =>
     cloneSnapshot(readSchemaValues(fields) as SchemaValues<Schema>),
   );
   const snapshotBox = reactive<{
     initialized: boolean;
     value: SchemaValues<Schema> | null;
+    initial?: SchemaValues<Schema> | null;
   }>({
-    initialized: true,
+    initialized: !dynamic,
     value: initialSnapshot,
-  });
+    ...(dynamic ? { initial: initialSnapshot } : {}),
+  }, undefined, { sid: setup?.nextKey("form.snapshot") });
+
+  const initialize = dynamic ? () => {
+    if (!snapshotBox.initialized) {
+      snapshotBox.initial = cloneSnapshot(readSchemaValues(fields) as SchemaValues<Schema>);
+      snapshotBox.value = snapshotBox.initial;
+      snapshotBox.initialized = true;
+    }
+    dynamic.initialize();
+  } : undefined;
   const values = computed(
     () => readSchemaValues(fields) as SchemaValues<Schema>,
   );
@@ -132,8 +157,10 @@ export function createForm<Schema extends AnyRecord>(
   // keeps `ctx.scope` active across each `await`, and `ctx.signal` supersedes a
   // stale validation run. Nothing reads or writes a store outside an
   // effect/reaction, so the work stays bound to the dispatch scope.
+  const validationSignals = new WeakMap<Scope, AbortSignal>();
   const validateFx = effect<void, void, Error>(
     async (_payload, { scope, signal }) => {
+      validationSignals.set(unwrapMicroScope(scope), signal);
       const dependencies = new Set<AnyStore>();
       const ctx = createValidationContext({
         path: [],
@@ -194,11 +221,21 @@ export function createForm<Schema extends AnyRecord>(
   reaction({
     on: validate,
     async run() {
+      const caller = getOwner();
+      const current = getCurrentScope();
+      const scope = current && unwrapMicroScope(current);
       validateFx.abort();
+      const pending = validateFx();
+      const signal = scope ? validationSignals.get(scope) : undefined;
       try {
-        await validateFx();
+        await pending;
       } catch (error) {
-        ignoreAbort(error);
+        // Disposal uses the effect's original abort reason, which need not be
+        // named AbortError. Consume only this call's lifetime cancellation;
+        // validator failures (including concurrent failures) still propagate.
+        if (!(caller?.disposed && signal?.aborted && error === signal.reason)) ignoreAbort(error);
+      } finally {
+        if (scope && validationSignals.get(scope) === signal) validationSignals.delete(scope);
       }
     },
   });
@@ -216,6 +253,7 @@ export function createForm<Schema extends AnyRecord>(
     void,
     Error
   >(async (payload) => {
+    initialize?.();
     if (payload.values) {
       await fillSchemaFx({
         schema: fields,
@@ -247,7 +285,7 @@ export function createForm<Schema extends AnyRecord>(
   const resetFx = effect<void, void>(async () => {
     await resetSchemaFx(fields);
     snapshotBox.initialized = true;
-    snapshotBox.value = cloneSnapshot(initialSnapshot);
+    snapshotBox.value = cloneSnapshot(dynamic ? snapshotBox.initial! : initialSnapshot);
     changed(readStoreSnapshot(values));
     errorsChanged(readStoreSnapshot(errors));
   }, "form.reset.effect");
@@ -320,10 +358,12 @@ export function createForm<Schema extends AnyRecord>(
     clearInnerErrors: () => clearInnerErrorsFx(),
     forceUpdateSnapshot: () => forceUpdateSnapshotFx(),
     pick(selection) {
-      return createForm({
-        schema: pickSchema(fields, selection as AnyRecord),
-        validationStrategies: config.validationStrategies,
-      }) as FormProjection<
+      // A model schema cannot resolve self/children during declaration. A
+      // projection declared beside its parent shares that deferred resolver.
+      const options = { validationStrategies: config.validationStrategies };
+      return (dynamic && getModelSetupContext()
+        ? createForm({ ...options, schema: () => pickSchema(fields, selection as AnyRecord) })
+        : createForm({ ...options, schema: pickSchema(fields, selection as AnyRecord) })) as FormProjection<
         PickSchema<NormalizeSchema<Schema>, typeof selection>
       >;
     },
@@ -339,11 +379,31 @@ export function createForm<Schema extends AnyRecord>(
     },
   };
 
-  if (strategies.has("change")) {
+  if (dynamic && strategies.has("change")) {
+    dynamic.observe(() => {
+      const caller = getOwner();
+      // This dispatch is detached from the field write. Its model may be
+      // disposed before validation settles; consume its cancellation. Actual
+      // validator failures still reject an explicitly awaited validate().
+      void validate().catch(error => { if (!caller?.disposed) ignoreAbort(error); });
+    });
+  } else if (strategies.has("change")) {
     attachSchemaChangeValidation(fields, () => validate());
   }
 
-  return form;
+  return setup ? modelFormValue(form, initialize, dynamic) : form;
+}
+
+function modelFormValue<Schema extends AnyRecord>(form: Form<Schema>, initialize?: () => void, dynamic?: ReturnType<typeof modelSchema>): Form<Schema> {
+  return scopedModelValue(form, { initialize, bound(view, context) {
+    if (dynamic) Object.defineProperty(view, "fields", { configurable: true, enumerable: true, get() {
+      const fields = dynamic.bind(context);
+      Object.defineProperty(view, "fields", { configurable: true, enumerable: true, value: fields });
+      return fields;
+    } });
+    const pick = view.pick;
+    view.pick = selection => context.bind(modelFormValue(pick(selection)));
+  } });
 }
 
 function normalizeSchema<Schema extends AnyRecord>(

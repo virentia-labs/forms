@@ -1075,7 +1075,7 @@ describe("createShapeField", () => {
 
       await scoped(appScope, async () => {
         const first = shape.validate();
-        await started.promise;
+        await scoped(appScope, () => started.promise);
         await shape.fill({ name: "y" });
         const second = shape.validate();
 

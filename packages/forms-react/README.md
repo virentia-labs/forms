@@ -91,6 +91,22 @@ export function TextInput({ field }: { field: AnyField }) {
 }
 ```
 
+## Static model instances and wizards
+
+Pass the native API from the constructed instance to the existing hooks:
+`useField(signup.email.value!.field)`, `useForm(signup.form)` or
+`useWizardForm(signup.wizard)`. Use the instance's application `ScopeProvider`.
+Instances in the same application keep independent values and navigation.
+
+For a wizard, `view.currentForm` and `view.currentStep.form` are bound forms;
+they can be passed to `useForm` without flattening their units. Declare the
+wizard and its picked step forms once in `staticModel.setup`, then create an
+instance through `.create()` or `children`. Unmounting a view removes its
+subscriptions; the model's owner controls when the form itself is disposed.
+
+See the [owned-field wizard example](../../docs/examples/model-wizard.ts) and
+[ownership guide](../../docs/field-models.md).
+
 ## Main API
 
 `useField`, `useForm`, `useWizard`, `useWizardForm`.

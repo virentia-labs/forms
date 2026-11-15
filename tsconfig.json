@@ -12,6 +12,7 @@
     "baseUrl": ".",
     "paths": {
       "@virentia/forms": ["packages/forms/lib/index.ts"],
+      "@virentia/forms/models": ["packages/forms/lib/models.ts"],
       "@virentia/forms-react": ["packages/forms-react/lib/index.ts"],
       "@virentia/forms-zod": ["packages/forms-zod/lib/index.ts"],
       "@virentia/forms-effector": ["packages/effector/lib/index.ts"]

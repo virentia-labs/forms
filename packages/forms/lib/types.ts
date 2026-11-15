@@ -264,6 +264,9 @@ export type PickSchema<Schema, Selection> = {
 
 export type FormProjection<Schema extends AnyRecord> = Form<Schema>;
 
+/** A resolver already returns declared fields, so their types need no normalization. */
+export type ModelForm<Schema extends AnyRecord> = Omit<Form<Schema>, "fields"> & { readonly fields: Schema };
+
 export interface WizardStep<Id extends string = string, StepForm extends AnyForm = AnyForm> {
   readonly id: Id;
   readonly form: StepForm;

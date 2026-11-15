@@ -1,4 +1,5 @@
 import { scoped, type Scope, type Store, type StoreWritable } from "@virentia/core";
+import { boundStoreScopeOf } from "@virentia/core/internal";
 import {
   normalizeField,
   readStoreSnapshot,
@@ -50,19 +51,19 @@ export interface FormView<Model extends Form> {
 
 export interface WizardView<Model extends Wizard> {
   readonly wizard: Model;
-  readonly steps: unknown;
-  readonly visibleSteps: unknown;
-  readonly currentId: unknown;
+  readonly steps: Model["steps"]["value"];
+  readonly visibleSteps: Model["visibleSteps"]["value"];
+  readonly currentId: Model["currentId"]["value"];
   readonly currentIndex: number;
-  readonly currentStep: unknown;
-  readonly currentForm: unknown;
-  readonly visitedIds: readonly unknown[];
-  readonly completedIds: readonly unknown[];
+  readonly currentStep: Model["currentStep"]["value"];
+  readonly currentForm: Model["currentForm"]["value"];
+  readonly visitedIds: Model["visitedIds"]["value"];
+  readonly completedIds: Model["completedIds"]["value"];
   readonly canGoBack: boolean;
   readonly canGoNext: boolean;
   next(): Promise<boolean>;
   back(): Promise<boolean>;
-  goTo(id: never): Promise<boolean>;
+  goTo: Model["goTo"];
   complete(): Promise<boolean>;
   reset(): Promise<void>;
 }
@@ -186,8 +187,9 @@ function useStoreSnapshot<T>(unit: Store<T> | StoreWritable<T>, scope: Scope): T
 
   const subscribe = useCallback(
     (notify: () => void) => {
+      const subscriptionScope = boundStoreScopeOf(unit) ?? scope;
       const unsubscribe = unit.subscribe((_value, nextScope) => {
-        if (nextScope !== scope) {
+        if (nextScope !== subscriptionScope) {
           return;
         }
 

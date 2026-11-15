@@ -1,4 +1,4 @@
-import { reaction, type Event, type EventCallable, type Store, type StoreWritable } from "@virentia/core";
+import { getCurrentScope, reaction, scoped, type Event, type EventCallable, type Store, type StoreWritable } from "@virentia/core";
 
 type Watchable<T> = Event<T> | EventCallable<T> | Store<T> | StoreWritable<T>;
 
@@ -26,8 +26,12 @@ export function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-export async function tick(times = 1): Promise<void> {
-  for (let index = 0; index < times; index += 1) {
-    await Promise.resolve();
-  }
+export function tick(times = 1): Promise<void> {
+  const scope = getCurrentScope();
+  const wait = async () => {
+    for (let index = 0; index < times; index += 1) await Promise.resolve();
+  };
+  // Test waits deliberately resume the caller's scope. A plain native promise
+  // is an external boundary and does not carry the kernel's async context.
+  return scope ? scoped(scope, wait) : wait();
 }

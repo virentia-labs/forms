@@ -1,13 +1,18 @@
 import {
   effect as virentiaEffect,
+  getCurrentScope,
   scope as createScope,
   scoped,
+  type Scope,
   type Store as VirentiaStore,
 } from "@virentia/core";
-import { fool } from "@virentia/effector";
+import { ensureAssociation, fool } from "@virentia/effector";
+import { toEffectorUnit } from "@virentia/effector/internal";
+import { applicationScopeOf } from "@virentia/core/internal";
 import { readStoreSnapshot } from "@virentia/forms";
 import {
   createStore,
+  allSettled,
   type Effect as EffectorEffect,
   type Event as EffectorEvent,
   type EventCallable as EffectorEventCallable,
@@ -60,9 +65,35 @@ export function bridgeMethod<Payload, Done = void>(
   run: (payload: Payload) => Promise<Done> | Done,
   name?: string,
 ): EffectorEffect<Payload, Done> {
-  const fx = virentiaEffect<Payload, Done>(
-    async (payload: Payload) => await run(payload),
+  return bridgeScopedMethod(run, name);
+}
+
+/** Internal fixed-model variant; ordinary forms remain usable in many apps. */
+export function bridgeScopedMethod<Payload, Done = void>(
+  run: (payload: Payload) => Promise<Done> | Done,
+  name?: string,
+  home?: Scope,
+): EffectorEffect<Payload, Done> {
+  const application = home && applicationScopeOf(home);
+  const fx = virentiaEffect<Payload, Done, Error>(
+    async (payload: Payload, { scope }) => {
+      if (application && applicationScopeOf(scope) !== application)
+        throw new Error("Form belongs to another associated application");
+      return await run(payload);
+    },
     name,
   );
-  return fool(fx) as unknown as EffectorEffect<Payload, Done>;
+  const projected = toEffectorUnit(fx);
+  // Effector launches via graphite. Direct calls from Core enter the paired
+  // Effector fork too, so pending/lifecycle and the returned result agree.
+  const callable = (payload: Payload): Promise<Done> => {
+    const current = getCurrentScope();
+    if (!current) return projected(payload);
+    const association = ensureAssociation({ virentia: applicationScopeOf(current) });
+    return scoped(current, () => allSettled(projected, { scope: association.effector, params: payload }).then(result => {
+      if (result.status === "fail") throw result.value;
+      return result.value;
+    }));
+  };
+  return Object.defineProperties(callable, Object.getOwnPropertyDescriptors(projected)) as EffectorEffect<Payload, Done>;
 }

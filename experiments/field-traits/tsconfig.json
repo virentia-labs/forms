@@ -1,0 +1,4 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["field.ts", "baseline.ts", "types.ts", "vitest.config.ts"]
+}

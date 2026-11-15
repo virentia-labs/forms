@@ -1,4 +1,5 @@
-import { computed, effect, event, store, type Store } from "@virentia/core";
+import { computed, effect, event, getCurrentScope, store, type Scope, type Store } from "@virentia/core";
+import { bindModelValueInScope, getModelSetupContext, modelScopeInstance, modelValueBindingOf, scopedModelValue, unwrapMicroScope } from "@virentia/core/internal";
 import { createForm } from "./form";
 import { appendUnique, readStoreSnapshot, type AnyRecord } from "./shared";
 import type {
@@ -36,15 +37,17 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
     throw new Error("Wizard requires at least one step");
   }
 
+  const inModel = Boolean(getModelSetupContext());
+  const stepViews = new WeakMap<Scope, { source: Steps; value: Steps }>();
   const stepsBox = store(config.steps);
   const currentIdBox = store(config.steps[0].id);
   const visitedBox = store([config.steps[0].id] as readonly Steps[number]["id"][]);
   const completedBox = store([] as readonly Steps[number]["id"][]);
-  const stepsStore = computed(() => stepsBox.value);
-  const visibleSteps = computed(() => filterVisibleSteps(stepsBox.value) as Steps);
+  const stepsStore = computed(() => modelSteps(stepsBox.value));
+  const visibleSteps = computed(() => filterVisibleSteps(readStoreSnapshot(stepsStore)) as Steps);
   const currentStep = computed(() => {
     const visible = readStoreSnapshot(visibleSteps);
-    return visible.find((item) => item.id === currentIdBox.value) ?? visible[0] ?? stepsBox.value[0];
+    return visible.find((item) => item.id === currentIdBox.value) ?? visible[0] ?? readStoreSnapshot(stepsStore)[0];
   });
   const currentId = computed(() => readStoreSnapshot(currentStep).id);
   const currentIndex = computed(() =>
@@ -160,8 +163,8 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
     changed(currentIdBox.value);
   }, "wizard.reset");
 
-  return {
-    kind: "wizard",
+  const wizard = {
+    kind: "wizard" as const,
     form: config.form as RootForm,
     steps: stepsStore as Store<Steps>,
     visibleSteps: visibleSteps as Store<Steps>,
@@ -182,6 +185,26 @@ export function createWizard<Steps extends readonly WizardStep[], RootForm exten
     reset: resetFx,
     read,
   };
+  return inModel ? scopedModelValue(wizard) : wizard;
+
+  function modelSteps(steps: Steps): Steps {
+    if (!inModel) return steps;
+    const current = getCurrentScope();
+    if (!current) return steps;
+    const scope = unwrapMicroScope(current);
+    if (!modelScopeInstance(scope)) return steps;
+    const cached = stepViews.get(scope);
+    if (cached?.source === steps) return cached.value;
+    // Store payloads do not pass through the namespace binder. Project their
+    // native forms here as well, so a saved currentForm remains instance-bound.
+    // Existing bound/borrowed forms keep their original owner; custom form
+    // contracts without model metadata retain their existing scoping behavior.
+    const value = steps.map(item => modelValueBindingOf(item.form)
+      ? { ...item, form: bindModelValueInScope(item.form, scope) }
+      : item) as unknown as Steps;
+    stepViews.set(scope, { source: steps, value });
+    return value;
+  }
 
   function filterVisibleSteps(steps: readonly WizardStep[]): readonly WizardStep[] {
     const values = config.form ? config.form.read() : undefined;
@@ -207,13 +230,13 @@ export function createWizardForm<
   StepsInput extends readonly WizardFormStepInput<Schema>[],
 >(
   config: CreateWizardFormConfig<Schema, StepsInput>,
-): Wizard<ResolveWizardFormSteps<Schema, StepsInput>, Form<Schema> & AnyForm> & {
+): Wizard<ResolveWizardFormSteps<Schema, StepsInput>, Form<Schema>> & {
   readonly form: Form<Schema>;
 } {
   const form = createForm(config as any) as Form<Schema>;
   const stepInputs = typeof config.steps === "function" ? config.steps(form) : config.steps;
   const steps = resolveWizardFormSteps(form, stepInputs);
-  const wizard = createWizard({ form: form as Form<Schema> & AnyForm, steps });
+  const wizard = createWizard({ form, steps });
 
   return Object.assign(wizard, { form });
 }

@@ -1,3 +1,4 @@
+import { applyErrorsToSchemaFx } from "./schema-effects";
 import {
   computed,
   effect,
@@ -7,14 +8,17 @@ import {
   store,
 } from "@virentia/core";
 import { createField } from "./field";
+import { shapeModelState } from "./collection-state";
+import { trackFieldRevisions } from "./field-state";
 import {
-  applyErrorsToSchemaFx,
   createValidationContext,
   createValidationDependencyTracker,
   hasErrors,
   ignoreAbort,
   isFieldContract,
   normalizeField,
+  modelFieldValue,
+  modelCollectionRecord,
   readObjectErrors,
   readObjectValues,
   readStoreSnapshot,
@@ -42,19 +46,17 @@ export function createShapeField(
   initial: Record<string, unknown>,
   options: CreateShapeFieldOptions = {},
 ): ShapeField<Record<string, AnyField>> {
-  const initialFields = normalizeShapeInput(initial, options);
-  const fieldsBox = store(initialFields);
+  const cells = shapeModelState();
+  const initialFields = cells ? {} : normalizeShapeInput(initial, options);
+  const fieldsBox = cells?.fields ?? store(initialFields);
+  const createChild = cells?.createField ?? ((key: string, value: unknown) => createShapeChild(key, value, options));
   const validators = toArray(options.validate);
   const strategies = new Set(options.validationStrategies ?? []);
-  const fields = computed(
-    () => fieldsBox.value as Readonly<Record<string, AnyField>>,
-  );
-  const state = computed(
-    () =>
-      readObjectValues(fieldsBox.value) as ShapeValues<
-        Record<string, AnyField>
-      >,
-  );
+  const fields = computed(() => modelCollectionRecord(fieldsBox.value));
+  const state = computed(() => {
+    if (cells) { void cells.revision.value; trackFieldRevisions(Object.values(fieldsBox.value)); }
+    return readObjectValues(fieldsBox.value) as ShapeValues<Record<string, AnyField>>;
+  });
   const innerErrors = computed(
     () =>
       readObjectErrors(fieldsBox.value, "innerErrors") as ShapeErrors<
@@ -67,7 +69,7 @@ export function createShapeField(
         Record<string, AnyField>
       >,
   );
-  const ownInnerErrorsBox = store<Record<string, unknown> | null>(null);
+  const ownInnerErrorsBox = cells?.ownErrors ?? store<Record<string, unknown> | null>(null);
   const errors = computed(
     () =>
       (ownInnerErrorsBox.value ??
@@ -197,7 +199,7 @@ export function createShapeField(
           const normalized = normalizeField(field);
           fills.push(() => normalized.fill(value));
         } else {
-          nextFields[key] = createShapeChild(key, value, options);
+          nextFields[key] = createChild(key, value);
         }
       }
 
@@ -206,6 +208,7 @@ export function createShapeField(
       for (const fill of fills) {
         await fill();
       }
+      if (cells) await cells.commit();
 
       changed(read());
       errorsChanged(readStoreSnapshot(errors));
@@ -218,12 +221,13 @@ export function createShapeField(
   );
 
   const resetFx = effect<void, void>(async () => {
-    fieldsBox.value = { ...initialFields };
+    fieldsBox.value = cells ? await cells.initialFields() : { ...initialFields };
     ownInnerErrorsBox.value = null;
 
     for (const field of Object.values(fieldsBox.value)) {
       await normalizeField(field).reset();
     }
+    if (cells) await cells.commit();
 
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
@@ -232,6 +236,7 @@ export function createShapeField(
   const addFx = effect<{ key: string; field: AnyField }, void, Error>(
     async (payload) => {
       fieldsBox.value = { ...fieldsBox.value, [payload.key]: payload.field };
+      if (cells) await cells.commit();
       changed(read());
       errorsChanged(readStoreSnapshot(errors));
     },
@@ -245,6 +250,7 @@ export function createShapeField(
 
     const { [key]: _removed, ...next } = fieldsBox.value;
     fieldsBox.value = next;
+    if (cells) await cells.commit();
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
   }, "shapeField.remove.effect");
@@ -252,6 +258,7 @@ export function createShapeField(
   const replaceFx = effect<{ key: string; field: AnyField }, void, Error>(
     async (payload) => {
       fieldsBox.value = { ...fieldsBox.value, [payload.key]: payload.field };
+      if (cells) await cells.commit();
       changed(read());
       errorsChanged(readStoreSnapshot(errors));
     },
@@ -261,6 +268,7 @@ export function createShapeField(
   const clearFx = effect<void, void, Error>(async () => {
     fieldsBox.value = {};
     ownInnerErrorsBox.value = null;
+    if (cells) await cells.commit();
     changed(read());
     errorsChanged(readStoreSnapshot(errors));
   }, "shapeField.clear.effect");
@@ -305,7 +313,7 @@ export function createShapeField(
     errorsChanged(readStoreSnapshot(errors));
   }, "shapeField.clearOuterErrors.effect");
 
-  return {
+  const field = {
     kind: "shape",
     fields,
     state,
@@ -331,7 +339,7 @@ export function createShapeField(
     clear: () => clearFx(),
     read,
     readFields() {
-      return fieldsBox.value;
+      return fields.value;
     },
     serialize() {
       return {
@@ -342,6 +350,10 @@ export function createShapeField(
       };
     },
   };
+  if (cells) {
+    reaction({ on: changed, run() { cells.revision.value++; } });
+  }
+  return modelFieldValue(field);
 
   function read(): Record<string, unknown> {
     return readObjectValues(fieldsBox.value);

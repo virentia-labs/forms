@@ -186,9 +186,6 @@ describe("createField", () => {
       const field = createField("");
       const errorsChanged = watchCalls(field.errorsChanged);
 
-      // NOTE: read only the channel stores (innerError/outerError) between writes.
-      // Reading the combined `error` computed here would poison a stale snapshot
-      // into the following in-effect emit (see the dedicated stale-computed test).
       await scoped(appScope, async () => {
         await field.setInnerErrors("Inner");
         expect(field.innerError.value).toBe("Inner");
@@ -224,7 +221,7 @@ describe("createField", () => {
       });
     });
 
-    it("carries the previously cached combined error on errorsChanged when the computed was read before an in-effect write", async () => {
+    it("emits the current combined error even when the computed was cached before an in-effect write", async () => {
       const appScope = scope();
       const field = createField("");
       const errorsChanged = watchCalls(field.errorsChanged);
@@ -233,16 +230,13 @@ describe("createField", () => {
         await field.setInnerErrors("Inner");
         // Read the `error` computed once -> caches "Inner".
         expect(field.error.value).toBe("Inner");
-        // Now write the outer channel: the write is correct, but the emit inside
-        // the effect reads a STALE snapshot of the cached computed.
+        // Publishing the new outer error must not read an old computed cache
+        // while the effect's store writes are still staged.
         await field.setOuterErrors("Outer");
 
-        // The stored state is correct once read again outside the effect...
         expect(field.outerError.value).toBe("Outer");
         expect(field.error.value).toBe("Outer");
-        // ...but errorsChanged carried the stale combined error ("Inner" instead
-        // of "Outer"). Pinned as actual (buggy) behavior.
-        expect(errorsChanged).toEqual(["Inner", "Inner"]);
+        expect(errorsChanged).toEqual(["Inner", "Outer"]);
       });
     });
 
