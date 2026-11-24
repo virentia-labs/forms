@@ -15,23 +15,40 @@ jobs:
     permissions:
       contents: write
       id-token: write
+    defaults:
+      run:
+        working-directory: forms
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          path: forms
+
+      - name: Checkout Virentia
+        uses: actions/checkout@v4
+        with:
+          repository: virentia-labs/virentia
+          ref: refs/tags/@virentia/core@0.12.0
+          path: virentia
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 11.0.9
           run_install: false
+          package_json_file: forms/package.json
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: |
+            virentia/pnpm-lock.yaml
+            forms/pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
 
       # Pinned to 11.x: npm 12 changed `npm info --json` to return an array
@@ -41,8 +58,18 @@ jobs:
       - name: Set up npm
         run: npm install -g npm@11
 
+      - name: Build Virentia dependencies
+        working-directory: virentia
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @virentia/core --filter @virentia/react --filter @virentia/vue --filter @virentia/effector run build
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Link shared runtime dependencies
+        working-directory: ${{ github.workspace }}
+        run: node virentia/scripts/check-ecosystem.mjs --phase link --repo forms
 
       - name: Verify release commit
         run: |

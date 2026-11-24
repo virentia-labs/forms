@@ -15,24 +15,53 @@ jobs:
     name: Typecheck, test, build
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: forms
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          path: forms
+          persist-credentials: false
+
+      - name: Checkout Virentia
+        uses: actions/checkout@v4
+        with:
+          repository: virentia-labs/virentia
+          ref: b13af0f8b64087cbfe8e056e50a054266acf9483
+          path: virentia
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 11.0.9
           run_install: false
+          package_json_file: forms/package.json
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: |
+            virentia/pnpm-lock.yaml
+            forms/pnpm-lock.yaml
+
+      - name: Build Virentia dependencies
+        working-directory: virentia
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @virentia/core --filter @virentia/react --filter @virentia/vue --filter @virentia/effector run build
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Link shared runtime dependencies
+        working-directory: ${{ github.workspace }}
+        run: node virentia/scripts/check-ecosystem.mjs --phase link --repo forms
 
       - name: Typecheck
         run: pnpm typecheck
