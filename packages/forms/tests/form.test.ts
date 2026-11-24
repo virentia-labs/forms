@@ -1187,13 +1187,13 @@ describe("createForm", () => {
         state: computed(() => valueBox.value),
         async fill(next: number) {
           order.push("field.fill:start");
-          await Promise.resolve();
+          await scoped(() => Promise.resolve());
           valueBox.value = next;
           order.push("field.fill:end");
         },
         async reset() {
           order.push("field.reset:start");
-          await Promise.resolve();
+          await scoped(() => Promise.resolve());
           valueBox.value = 0;
           order.push("field.reset:end");
         },

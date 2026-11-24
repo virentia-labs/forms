@@ -1,5 +1,16 @@
 # @virentia/forms-effector
 
+## 0.2.0
+
+### Minor Changes
+
+- Support native model fields and forms through the Effector bridge.
+
+- Updated Virentia dependencies
+  - @virentia/forms@0.3.0
+  - @virentia/core@0.12.0
+  - @virentia/effector@0.5.5
+
 ## 0.1.4
 
 ### Patch Changes

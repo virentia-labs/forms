@@ -1,5 +1,14 @@
 # @virentia/forms-zod
 
+## 0.2.0
+
+### Minor Changes
+
+- Support Zod validation for native model fields and forms.
+
+- Updated Virentia dependencies
+  - @virentia/forms@0.3.0
+
 ## 0.1.5
 
 ### Patch Changes

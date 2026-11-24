@@ -1,6 +1,7 @@
 import type { Form } from "@virentia/forms";
-import { bridgeEvent, bridgeMethod, bridgeStore } from "./bridge";
-import { createSchemaLens } from "./lens";
+import { bridgeEvent, bridgeMethod, bridgeScopedMethod, bridgeStore } from "./bridge";
+import { boundStoreScopeOf } from "@virentia/core/internal";
+import { createFormSchemaLens } from "./lens";
 import type { AnyVirentiaUnit, EffectorForm, SchemaLens } from "./types";
 
 type AnyRecord = Record<string, any>;
@@ -22,6 +23,8 @@ export function formToEffector<Schema extends AnyRecord>(
   form: Form<Schema>,
 ): EffectorForm<Schema> {
   const asUnit = (unit: unknown) => unit as AnyVirentiaUnit;
+  const home = boundStoreScopeOf(form.values);
+  const method: typeof bridgeMethod = (run, name) => bridgeScopedMethod(run, name, home);
 
   return {
     $values: bridgeStore(form.values),
@@ -42,17 +45,17 @@ export function formToEffector<Schema extends AnyRecord>(
     submitted: bridgeEvent(asUnit(form.submitted)),
     validatedAndSubmitted: bridgeEvent(asUnit(form.validatedAndSubmitted)),
 
-    submit: bridgeMethod(() => form.submit(), "form.submit"),
-    validate: bridgeMethod(() => form.validate(), "form.validate"),
-    fill: bridgeMethod(
+    submit: method(() => form.submit(), "form.submit"),
+    validate: method(() => form.validate(), "form.validate"),
+    fill: method(
       (payload: Parameters<typeof form.fill>[0]) => form.fill(payload),
       "form.fill",
     ),
-    reset: bridgeMethod(() => form.reset(), "form.reset"),
-    clearOuterErrors: bridgeMethod(() => form.clearOuterErrors(), "form.clearOuterErrors"),
-    clearInnerErrors: bridgeMethod(() => form.clearInnerErrors(), "form.clearInnerErrors"),
-    forceUpdateSnapshot: bridgeMethod(() => form.forceUpdateSnapshot(), "form.forceUpdateSnapshot"),
+    reset: method(() => form.reset(), "form.reset"),
+    clearOuterErrors: method(() => form.clearOuterErrors(), "form.clearOuterErrors"),
+    clearInnerErrors: method(() => form.clearInnerErrors(), "form.clearInnerErrors"),
+    forceUpdateSnapshot: method(() => form.forceUpdateSnapshot(), "form.forceUpdateSnapshot"),
 
-    fields: createSchemaLens(form.fields) as SchemaLens<Form<Schema>["fields"]>,
+    fields: createFormSchemaLens(() => form.fields) as SchemaLens<Form<Schema>["fields"]>,
   } as EffectorForm<Schema>;
 }

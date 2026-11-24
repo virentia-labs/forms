@@ -1,5 +1,16 @@
 # @virentia/forms-react
 
+## 0.3.0
+
+### Minor Changes
+
+- Support native form models and retain declared wizard step IDs in useWizard, including goTo.
+
+- Updated Virentia dependencies
+  - @virentia/forms@0.3.0
+  - @virentia/core@0.12.0
+  - @virentia/react@0.6.0
+
 ## 0.2.4
 
 ### Patch Changes

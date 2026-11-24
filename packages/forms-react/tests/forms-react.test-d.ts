@@ -244,14 +244,14 @@ type Expect<T extends true> = T;
   type _canBack = Expect<Equal<typeof view.canGoBack, boolean>>;
   type _canNext = Expect<Equal<typeof view.canGoNext, boolean>>;
 
-  // Snapshot-shaped reads are erased to `unknown` on the view; id lists stay arrays.
-  type _currentId = Expect<Equal<typeof view.currentId, unknown>>;
-  type _currentStep = Expect<Equal<typeof view.currentStep, unknown>>;
-  type _currentForm = Expect<Equal<typeof view.currentForm, unknown>>;
-  type _steps = Expect<Equal<typeof view.steps, unknown>>;
-  type _visibleSteps = Expect<Equal<typeof view.visibleSteps, unknown>>;
-  type _visitedIds = Expect<Equal<typeof view.visitedIds, readonly unknown[]>>;
-  type _completedIds = Expect<Equal<typeof view.completedIds, readonly unknown[]>>;
+  // Snapshots retain the model's step ids and form types.
+  type _currentId = Expect<Equal<typeof view.currentId, "a" | "b">>;
+  type _currentStep = Expect<Equal<typeof view.currentStep, typeof wizard.currentStep.value>>;
+  type _currentForm = Expect<Equal<typeof view.currentForm, typeof wizard.currentForm.value>>;
+  type _steps = Expect<Equal<typeof view.steps, typeof wizard.steps.value>>;
+  type _visibleSteps = Expect<Equal<typeof view.visibleSteps, typeof wizard.visibleSteps.value>>;
+  type _visitedIds = Expect<Equal<typeof view.visitedIds, readonly ("a" | "b")[]>>;
+  type _completedIds = Expect<Equal<typeof view.completedIds, readonly ("a" | "b")[]>>;
 
   // next / back / complete resolve to a boolean; reset to void.
   type _next = Expect<Equal<ReturnType<typeof view.next>, Promise<boolean>>>;
@@ -262,14 +262,9 @@ type Expect<T extends true> = T;
   type _completeParams = Expect<Equal<Parameters<typeof view.complete>, []>>;
   type _reset = Expect<Equal<ReturnType<typeof view.reset>, Promise<void>>>;
 
-  // BUG PIN (react-goto-never): WizardView["goTo"] declares its parameter as
-  // `never`, so from the view goTo is effectively uncallable — even a valid
-  // step id is rejected. Pinned as current behavior via the full declared shape
-  // `(id: never) => Promise<boolean>` and a `[never]` param list. (We pin the
-  // whole signature rather than ReturnType<> because the built-in ReturnType<>
-  // utility is unreliable on never-parameter functions.)
-  type _goToSig = Expect<Equal<typeof view.goTo, (id: never) => Promise<boolean>>>;
-  type _goToParams = Expect<Equal<Parameters<typeof view.goTo>, [never]>>;
+  type _goToSig = Expect<Equal<typeof view.goTo, typeof wizard.goTo>>;
+  type _goToParams = Expect<Equal<Parameters<typeof view.goTo>, ["a" | "b"]>>;
+  view.goTo("a");
 
   // @ts-expect-error — next() takes no arguments.
   view.next("a");
@@ -277,8 +272,8 @@ type Expect<T extends true> = T;
   view.back(1);
   // @ts-expect-error — complete() takes no arguments.
   view.complete(true);
-  // @ts-expect-error — goTo's param is `never`; even a real step id is rejected.
-  view.goTo("a");
+  // @ts-expect-error — only declared step ids are accepted.
+  view.goTo("missing");
 }
 
 // ===========================================================================

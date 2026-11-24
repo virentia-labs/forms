@@ -4,3 +4,11 @@ dist/
 .turbo/
 .vite/
 coverage/
+
+# Left behind when a `vitest typecheck` run is interrupted; vitest removes it on a clean exit.
+tsconfig.vitest-temp.json
+.DS_Store
+
+# Internal design discussions and investigation records stay local.
+experiments/field-traits/README.md
+experiments/model-fields/README.md

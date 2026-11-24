@@ -47,11 +47,11 @@ describe("@virentia/forms", () => {
       kind: "delayed",
       state: computed(() => valueBox.value),
       async fill(next: number) {
-        await Promise.resolve();
+        await scoped(() => Promise.resolve());
         valueBox.value = next;
       },
       async reset() {
-        await Promise.resolve();
+        await scoped(() => Promise.resolve());
         valueBox.value = 0;
       },
       read() {
@@ -152,8 +152,8 @@ describe("@virentia/forms", () => {
       expect(username.error.value).toBe("Already taken");
 
       forbidden.value = "free";
-      await Promise.resolve();
-      await Promise.resolve();
+      await scoped(() => Promise.resolve());
+      await scoped(() => Promise.resolve());
 
       expect(username.error.value).toBe(null);
     });

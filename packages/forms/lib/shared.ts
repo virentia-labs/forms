@@ -1,3 +1,5 @@
+import { applyErrorsToSchemaFx, clearSchemaErrorsFx, fillSchemaFx, resetSchemaFx, validateSchemaFx } from "./schema-effects";
+export { applyErrorsToSchemaFx, clearSchemaErrorsFx, fillSchemaFx, resetSchemaFx, validateSchemaFx } from "./schema-effects";
 import {
   computed,
   effect,
@@ -11,6 +13,7 @@ import {
   type Store,
   type StoreWritable,
 } from "@virentia/core";
+import { bindModelValueInScope, getModelSetupContext, isTracking, modelScopeInstance, modelValueBindingOf, scopedModelValue, storeModeOf, storeReadScopeOf, unwrapMicroScope } from "@virentia/core/internal";
 import type {
   AnyField,
   FieldContract,
@@ -31,6 +34,51 @@ export type PayloadArgs<T> = undefined extends T ? [payload?: T] : [payload: T];
 export type AnyRecord = Record<string, any>;
 
 const normalizedFields = new WeakMap<object, NormalizedField<any, any, any>>();
+const validationScopes = new WeakMap<ValidationContext, Scope>();
+const validationDependencyScopes = new WeakMap<ReadonlySet<AnyStore>, Map<AnyStore, Scope>>();
+
+/** Complete native fields already implement normalization without extra units. */
+export function registerNormalizedField<T extends NormalizedField<any, any, any>>(field: T): T {
+  normalizedFields.set(field, field);
+  return field;
+}
+
+export function modelFieldValue<T extends NormalizedField<any, any, any>>(field: T): T {
+  if (!getModelSetupContext() && !collectionModelScope()) return field;
+  registerNormalizedField(field);
+  return scopedModelValue(field, { bound(view) {
+    registerNormalizedField(view);
+    // A parent computed must observe the child's bound store. Calling a plain
+    // scoped method would collect its raw node in the parent's scope instead.
+    const read = view.read;
+    view.read = () => isTracking() ? readStoreSnapshot(view.state) : read();
+    view.serialize = () => ({ value: view.read(), errors: readStoreSnapshot(view.errors) });
+  } });
+}
+
+/** Shared collection computeds project their payload in the evaluating model. */
+export function modelCollectionFields<T extends AnyField>(fields: readonly T[]): readonly T[] {
+  const scope = collectionModelScope();
+  return scope ? fields.map(field => bindCollectionField(field, scope)) : fields;
+}
+export function modelCollectionRecord<T extends Record<string, AnyField>>(fields: T): T {
+  const scope = collectionModelScope();
+  if (!scope) return fields;
+  return Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, bindCollectionField(field, scope)])) as T;
+}
+function collectionModelScope(): Scope | undefined {
+  const scope = getCurrentScope();
+  return scope && modelScopeInstance(unwrapMicroScope(scope)) ? scope : undefined;
+}
+function bindCollectionField<T extends AnyField>(field: T, scope: Scope): T {
+  // Project the actual public field, not normalizeField's internal adapter:
+  // third-party fields may have extra members, prototypes and private brands.
+  return modelValueBindingOf(field) ? bindModelValueInScope(field, scope) : field;
+}
+
+export function isNormalizedField(value: unknown): value is NormalizedField<any, any, any> {
+  return !!value && typeof value === "object" && normalizedFields.get(value) === value;
+}
 const nativeStoreKeys = new Set<PropertyKey>([
   "node",
   "writable",
@@ -212,15 +260,20 @@ export function normalizeField<Value, Errors, Fill>(
   };
 
   normalizedFields.set(field as object, normalized);
+  if (getModelSetupContext()) normalizedFields.set(normalized, normalized);
   return normalized;
 }
 
 export function readStoreSnapshot<T>(unit: Store<T> | StoreWritable<T>): T {
+  // Native value stores keep their accessor on a shared prototype. Reflection
+  // describes the payload only for reactive stores and structural adapters.
+  const mode = storeModeOf(unit);
+  if (mode === "ref") return unit.value;
   const keys = Reflect.ownKeys(unit as object).filter(
     (key) => !nativeStoreKeys.has(key),
   );
 
-  if (keys.length === 1 && keys[0] === "value") {
+  if (mode !== "reactive" && keys.length === 1 && keys[0] === "value") {
     return Reflect.get(unit as object, "value") as T;
   }
 
@@ -240,16 +293,9 @@ export function readStoreSnapshot<T>(unit: Store<T> | StoreWritable<T>): T {
  * Runs `fn` with `scope` active and restores the previously active scope
  * synchronously, returning whatever `fn` produced.
  *
- * `scoped(scope, asyncFn)` only restores the previous scope once the returned
- * promise settles (see @virentia/core `runScopeTask`), so it keeps `scope`
- * active across every `await` inside `asyncFn`. When such work is launched
- * detached from a reaction, that late restoration writes the reaction's firing
- * scope back into the global active scope and leaks it into unrelated work.
- *
- * `emitIn` instead keeps `scope` active only for the synchronous portion of
- * `fn` — long enough to dispatch units and read stores under the right scope —
- * and hands back the resulting promise for the caller to await outside of any
- * scope. Awaiting a promise needs no active scope, so nothing leaks.
+ * The wrapper returns the unit's own completion promise unchanged. Scope is
+ * installed only for dispatch; native promises in user callbacks still need
+ * an explicit scoped continuation, while direct unit awaits carry context.
  */
 export function emitIn<T>(scope: Scope, fn: () => T): T {
   let result!: T;
@@ -316,18 +362,42 @@ export function createValidationDependencyTracker(
       // active scope after it settles even when it fires detached (from a write
       // in a suspended scope), so revalidation never clobbers the ambient scope
       // of concurrent work.
+      const foreign = validationDependencyScopes.get(dependencies);
       const dispose = owner((disposeOwner) => {
-        reaction({
-          on: [...dependencies],
-          scope,
-          async run() {
-            try {
-              await runAgain();
-            } catch (error) {
-              ignoreAbort(error);
-            }
-          },
-        });
+        if (!foreign) {
+          reaction({
+            on: [...dependencies],
+            scope,
+            async run() {
+              try {
+                await runAgain();
+              } catch (error) {
+                ignoreAbort(error);
+              }
+            },
+          });
+          return disposeOwner;
+        }
+
+        const groups = new Map<Scope, AnyStore[]>();
+        for (const dependency of dependencies) {
+          const home = foreign.get(dependency) ?? scope;
+          const group = groups.get(home);
+          if (group) group.push(dependency); else groups.set(home, [dependency]);
+        }
+        for (const [home, units] of groups) {
+          reaction({
+            on: units,
+            scope: home,
+            async run() {
+              try {
+                await scoped(scope, () => runAgain());
+              } catch (error) {
+                ignoreAbort(error);
+              }
+            },
+          });
+        }
 
         return disposeOwner;
       });
@@ -343,20 +413,31 @@ export function createValidationContext(config: {
   dependencies: Set<AnyStore>;
   scope: Scope;
 }): ValidationContext {
-  return {
+  const context: ValidationContext = {
     path: config.path,
     signal: config.signal,
     read<T>(unit: Store<T> | StoreWritable<T>): T {
       config.dependencies.add(unit);
-      return scoped(config.scope, () => readStoreSnapshot(unit));
+      const home = storeReadScopeOf(unit, config.scope);
+      let foreign = validationDependencyScopes.get(config.dependencies);
+      if (home !== config.scope) {
+        if (!foreign) {
+          foreign = new Map();
+          validationDependencyScopes.set(config.dependencies, foreign);
+        }
+        foreign.set(unit, home);
+      } else {
+        foreign?.delete(unit);
+      }
+      return scoped(home, () => readStoreSnapshot(unit));
     },
   };
+  validationScopes.set(context, config.scope);
+  return context;
 }
 
-// Validator runners are plain async — the one place it is safe, because the only
-// thing they `await` is a *user validator* (an external boundary), not a unit
-// that needs the ambient scope. The caller does a single `await` and then reads
-// synchronously.
+// Each validator starts in the captured application, including validators after
+// an earlier native promise. Callers re-enter that scope to commit the result.
 export async function runFieldValidators<Value, Errors>(
   validators: readonly FieldValidator<Value, Errors>[],
   value: Value,
@@ -398,6 +479,17 @@ export async function runFormValidators<Values, Errors>(
 }
 
 function runValidationUnit<Value, Errors>(
+  validator: ValidationUnit<Value, Errors>,
+  value: Value,
+  ctx: ValidationContext,
+): Promise<ValidationResult<Errors>> | MaybePromise<ValidationResult<Errors>> {
+  const scope = validationScopes.get(ctx);
+  return scope
+    ? scoped(scope, () => invokeValidationUnit(validator, value, ctx))
+    : invokeValidationUnit(validator, value, ctx);
+}
+
+function invokeValidationUnit<Value, Errors>(
   validator: ValidationUnit<Value, Errors>,
   value: Value,
   ctx: ValidationContext,
@@ -482,162 +574,6 @@ export function readArrayErrors(
   return items.map((field) =>
     readStoreSnapshot(normalizeField(field)[channel]),
   );
-}
-
-// Schema traversal runs as per-call effects: the caller awaits one of these with
-// a direct effect await, which restores the caller's scope on return. Recursion
-// re-invokes the same effect (also a direct await).
-export const fillSchemaFx = effect<
-  { schema: AnyRecord; values: AnyRecord },
-  void,
-  Error
->(async ({ schema, values }) => {
-  for (const [key, value] of Object.entries(values)) {
-    const fieldOrSchema = schema[key];
-
-    if (!fieldOrSchema) {
-      continue;
-    }
-
-    if (isFieldContract(fieldOrSchema)) {
-      await normalizeField(fieldOrSchema).fill(value);
-    } else {
-      await fillSchemaFx({ schema: fieldOrSchema, values: value as AnyRecord });
-    }
-  }
-}, "forms.fillSchema");
-
-export const resetSchemaFx = effect<AnyRecord, void, Error>(async (schema) => {
-  for (const fieldOrSchema of Object.values(schema)) {
-    if (isFieldContract(fieldOrSchema)) {
-      await normalizeField(fieldOrSchema).reset();
-    } else {
-      await resetSchemaFx(fieldOrSchema);
-    }
-  }
-}, "forms.resetSchema");
-
-export const validateSchemaFx = effect<AnyRecord, void, Error>(
-  async (schema) => {
-    for (const fieldOrSchema of Object.values(schema)) {
-      if (isFieldContract(fieldOrSchema)) {
-        await normalizeField(fieldOrSchema).validate();
-      } else {
-        await validateSchemaFx(fieldOrSchema);
-      }
-    }
-  },
-  "forms.validateSchema",
-);
-
-export const clearSchemaErrorsFx = effect<
-  { schema: AnyRecord; channel: "inner" | "outer" },
-  void,
-  Error
->(async ({ schema, channel }) => {
-  for (const fieldOrSchema of Object.values(schema)) {
-    if (isFieldContract(fieldOrSchema)) {
-      const field = normalizeField(fieldOrSchema);
-      if (channel === "inner") {
-        await field.clearInnerErrors();
-      } else {
-        await field.clearOuterErrors();
-      }
-    } else {
-      await clearSchemaErrorsFx({ schema: fieldOrSchema, channel });
-    }
-  }
-}, "forms.clearSchemaErrors");
-
-export const applyErrorsToSchemaFx = effect<
-  { schema: AnyRecord; errors: AnyRecord; channel: "inner" | "outer" },
-  void,
-  Error
->(async ({ schema, errors, channel }) => {
-  const normalizedErrors = expandDottedPaths(errors);
-
-  for (const [key, errorValue] of Object.entries(normalizedErrors)) {
-    const fieldOrSchema = schema[key];
-
-    if (!fieldOrSchema) {
-      continue;
-    }
-
-    if (isFieldContract(fieldOrSchema)) {
-      const field = normalizeField(fieldOrSchema);
-      if (channel === "inner") {
-        await field.setInnerErrors(errorValue);
-      } else {
-        await field.setOuterErrors(errorValue);
-      }
-    } else if (errorValue && typeof errorValue === "object") {
-      await applyErrorsToSchemaFx({
-        schema: fieldOrSchema,
-        errors: errorValue as AnyRecord,
-        channel,
-      });
-    }
-  }
-}, "forms.applyErrorsToSchema");
-
-function expandDottedPaths(input: AnyRecord): AnyRecord {
-  const result: AnyRecord = {};
-
-  for (const [key, value] of Object.entries(input)) {
-    if (key.includes(".")) {
-      setNestedPath(result, key.split("."), value);
-    } else {
-      const nextValue = isPlainObject(value) ? expandDottedPaths(value) : value;
-      const previousValue = result[key];
-
-      result[key] =
-        isPlainObject(previousValue) && isPlainObject(nextValue)
-          ? mergePlainObjects(previousValue, nextValue)
-          : nextValue;
-    }
-  }
-
-  return result;
-}
-
-function setNestedPath(
-  target: AnyRecord,
-  path: readonly string[],
-  value: unknown,
-): void {
-  let cursor = target;
-
-  for (let index = 0; index < path.length; index += 1) {
-    const key = path[index];
-
-    if (index === path.length - 1) {
-      cursor[key] = value;
-      return;
-    }
-
-    const next = cursor[key];
-
-    if (!isPlainObject(next)) {
-      cursor[key] = {};
-    }
-
-    cursor = cursor[key] as AnyRecord;
-  }
-}
-
-function mergePlainObjects(first: AnyRecord, second: AnyRecord): AnyRecord {
-  const result = { ...first };
-
-  for (const [key, value] of Object.entries(second)) {
-    const previousValue = result[key];
-
-    result[key] =
-      isPlainObject(previousValue) && isPlainObject(value)
-        ? mergePlainObjects(previousValue, value)
-        : value;
-  }
-
-  return result;
 }
 
 export function schemaIsPending(schema: AnyRecord): boolean {

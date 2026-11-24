@@ -133,6 +133,48 @@ export function createSchemaLens(node: unknown): unknown {
   return {};
 }
 
+/** Form schemas can replace refs; resolve each fresh property access again. */
+export function createFormSchemaLens(read: () => unknown): unknown {
+  const current = read();
+  if (isFieldNode(current) || !current || typeof current !== "object") return createSchemaLens(current);
+  const fields = new WeakMap<object, unknown>();
+  const groups = new Map<string, unknown>();
+  const child = (key: string): unknown => {
+    const record = read() as Record<string, unknown> | undefined;
+    if (!record || !Object.hasOwn(record, key)) { groups.delete(key); return; }
+    const source = record[key];
+    if (isFieldNode(source)) {
+      groups.delete(key);
+      if (fields.has(source)) return fields.get(source);
+      const lens = createSchemaLens(source);
+      fields.set(source, lens);
+      return lens;
+    }
+    if (groups.has(key)) return groups.get(key);
+    const lens = createFormSchemaLens(() => (read() as Record<string, unknown> | undefined)?.[key]);
+    groups.set(key, lens);
+    return lens;
+  };
+  // Retain the existing eager construction cost; lookups reuse unchanged lenses.
+  for (const key of Object.keys(current)) child(key);
+  return new Proxy({}, {
+    get(target, key, receiver) {
+      if (typeof key !== "string") return Reflect.get(target, key, receiver);
+      const record = read();
+      if (record && typeof record === "object" && Object.hasOwn(record, key)) return child(key);
+      groups.delete(key);
+      return Reflect.get(target, key, receiver);
+    },
+    has(target, key) { const record = read(); return !!record && typeof record === "object" && Object.hasOwn(record, key) || Reflect.has(target, key); },
+    ownKeys() { const record = read(); return record && typeof record === "object" ? Object.keys(record) : []; },
+    getOwnPropertyDescriptor(_target, key) {
+      const record = read();
+      if (typeof key !== "string" || !record || typeof record !== "object" || !Object.hasOwn(record, key)) return;
+      return { configurable: true, enumerable: true, get: () => child(key) };
+    },
+  });
+}
+
 /* ------------------------------------------------------------------ *
  * Stable ids for array items
  * ------------------------------------------------------------------ */

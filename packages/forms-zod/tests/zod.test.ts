@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scope, scoped, store } from "@virentia/core";
+import { getCurrentScope, scope, scoped, store } from "@virentia/core";
 import {
   createArrayField,
   createField,
@@ -59,7 +59,8 @@ function runForm(
   values: unknown = {},
   ctx: ValidationContext = makeCtx(),
 ): Promise<Record<string, unknown> | null> {
-  return (zodValidator(schema as never) as unknown as FormRun)(values, ctx);
+  const run = () => (zodValidator(schema as never) as unknown as FormRun)(values, ctx);
+  return getCurrentScope() ? scoped(run) : run();
 }
 
 type FieldRun = (value: unknown, ctx: ValidationContext) => Promise<FieldError>;
@@ -69,7 +70,8 @@ function runField(
   value: unknown,
   ctx: ValidationContext = makeCtx(),
 ): Promise<FieldError> {
-  return (zodFieldValidator(schema as never) as unknown as FieldRun)(value, ctx);
+  const run = () => (zodFieldValidator(schema as never) as unknown as FieldRun)(value, ctx);
+  return getCurrentScope() ? scoped(run) : run();
 }
 
 // ---------------------------------------------------------------------------

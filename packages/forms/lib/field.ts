@@ -1,4 +1,6 @@
 import { computed, effect, event, reaction, scoped, store } from "@virentia/core";
+import { fieldRevision, fieldState, type FieldCell } from "./field-state";
+import { getModelSetupContext } from "@virentia/core/internal";
 import type {
   CreateFieldOptions,
   Field,
@@ -13,6 +15,7 @@ import {
   hasErrors,
   ignoreAbort,
   readStoreSnapshot,
+  modelFieldValue,
   runFieldValidators,
   toArray,
   type AnyStore,
@@ -52,20 +55,23 @@ export function createField<Value, Meta extends object = Record<string, never>>(
   initial: Value,
   options: CreateFieldOptions<Value, Meta> = {},
 ): Field<Value, Meta> {
-  const valueBox = store(initial);
+  const cells = fieldState();
+  const valueBox = (cells?.value as FieldCell<Value> | undefined) ?? store(initial);
   const initialMeta = (options.meta ?? {}) as Meta;
   const initialOuterError = options.error ?? null;
-  const innerErrorBox = store<FieldError>(null);
-  const outerErrorBox = store<FieldError>(initialOuterError);
-  const focusedBox = store(false);
-  const metaBox = store(initialMeta);
+  cells?.captureDefaults?.(initial, initialMeta, initialOuterError);
+  const innerErrorBox = cells?.innerError ?? store<FieldError>(null);
+  const outerErrorBox = cells?.outerError ?? store<FieldError>(initialOuterError);
+  const focusedBox = cells?.focused ?? store(false);
+  const metaBox = (cells?.meta as FieldCell<Meta> | undefined) ?? store(initialMeta);
   const validators = toArray(options.validate);
   const strategies = new Set(options.validationStrategies ?? []);
 
   const state = computed(() => valueBox.value);
   const innerError = computed(() => innerErrorBox.value);
   const outerError = computed(() => outerErrorBox.value);
-  const error = computed(() => outerErrorBox.value ?? innerErrorBox.value);
+  const readError = () => outerErrorBox.value ?? innerErrorBox.value;
+  const error = computed(readError);
   const meta = computed(() => metaBox.value);
   const isFocused = computed(() => focusedBox.value);
   const isValid = computed(() => error.value === null);
@@ -84,34 +90,22 @@ export function createField<Value, Meta extends object = Record<string, never>>(
   const validated = event<Value>("field.validated");
   const validationFailed = event<Value>("field.validationFailed");
 
-  // Every side effect that touches units or scope is an effect: the kernel keeps
-  // `ctx.scope` active across each `await`, and `ctx.signal` aborts the run when a
-  // newer one starts (cancel-previous / stale-result handling). Reactions await
-  // these effects, so the work stays bound to the dispatch scope instead of
-  // escaping it as detached fire-and-forget.
+  // Effects carry direct unit awaits and cancellation. A user validator's native
+  // promise is a separate boundary, so its synchronous commit re-enters scope.
   const validateFx = effect<void, void>(async (_payload, { scope, signal }) => {
     const dependencies = new Set<AnyStore>();
     const ctx = createValidationContext({ path: [], signal, dependencies, scope });
 
-    // Run the whole body inside `scope`. The validators are plain-async (they await
-    // user code — an external boundary — which may suspend for several ticks, e.g.
-    // an async schema parse), and after that await the ambient scope is no longer
-    // guaranteed (it may be the base scope when a dependency-tracker reaction
-    // re-runs us detached). A leaf field's tail only writes stores and emits (no
-    // nested effects), so a single `scoped(scope, async …)` is safe here and keeps
-    // every write bound to `scope` in every path.
-    await scoped(scope, async () => {
-      const nextError = await runFieldValidators(validators, read(), ctx);
-
-      if (signal.aborted) {
-        return;
-      }
-
+    const nextError = await scoped(scope, () => runFieldValidators(validators, read(), ctx));
+    if (signal.aborted) return;
+    // A user validator can suspend outside the kernel. Re-enter only for the
+    // synchronous commit; never retain an ambient scope across its promise.
+    scoped(scope, () => {
       innerErrorBox.value = nextError;
       dependencyTracker.update(scope, dependencies);
 
       const nextValue = read();
-      errorsChanged(readStoreSnapshot(error));
+      errorsChanged(readError());
 
       if (hasErrors(nextError)) {
         validationFailed(nextValue);
@@ -138,23 +132,24 @@ export function createField<Value, Meta extends object = Record<string, never>>(
   }, "field.fill.effect");
 
   const resetFx = effect<void, void>(async () => {
-    valueBox.value = initial;
+    const initialValue = cells ? cells.initialValue.value : initial;
+    valueBox.value = initialValue;
     innerErrorBox.value = null;
-    outerErrorBox.value = initialOuterError;
-    metaBox.value = initialMeta;
+    outerErrorBox.value = cells ? cells.initialOuterError.value : initialOuterError;
+    metaBox.value = (cells ? cells.initialMeta.value : initialMeta) as Meta;
     focusedBox.value = false;
-    changed(initial);
-    errorsChanged(readStoreSnapshot(error));
+    changed(initialValue);
+    errorsChanged(readError());
   }, "field.reset.effect");
 
   const setInnerErrorsFx = effect<FieldError, void>(async (errorValue) => {
     innerErrorBox.value = errorValue;
-    errorsChanged(readStoreSnapshot(error));
+    errorsChanged(readError());
   }, "field.setInnerErrors.effect");
 
   const setOuterErrorsFx = effect<FieldError, void>(async (errorValue) => {
     outerErrorBox.value = errorValue;
-    errorsChanged(readStoreSnapshot(error));
+    errorsChanged(readError());
   }, "field.setOuterErrors.effect");
 
   const field: Field<Value, Meta> = {
@@ -261,7 +256,12 @@ export function createField<Value, Meta extends object = Record<string, never>>(
     },
   });
 
-  return field;
+  if (getModelSetupContext()) {
+    const revision = cells?.revision ?? store(0);
+    reaction({ on: changed, run() { revision.value++; } });
+    Object.defineProperty(field, fieldRevision, { value: revision });
+  }
+  return modelFieldValue(field);
 
   function read(): Value {
     return valueBox.value;

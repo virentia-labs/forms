@@ -1,5 +1,7 @@
 import { effect } from "@virentia/core";
 import type { AnyField, FieldType } from "./types";
+import { isNormalizedField, modelFieldValue } from "./shared";
+import { fieldRevision } from "./field-state";
 
 // Methods that read synchronously and must stay plain functions.
 const syncAccessors = new Set<string>(["read", "serialize", "readFields"]);
@@ -34,6 +36,10 @@ function wrapFieldMethods<FieldValue extends AnyField>(field: FieldValue): Field
     result[key] = effect(async (payload: unknown) => await method(payload), `${kind}.${key}`);
   }
 
+  if (isNormalizedField(field)) {
+    if (fieldRevision in field) Object.defineProperty(result, fieldRevision, Object.getOwnPropertyDescriptor(field, fieldRevision)!);
+    return modelFieldValue(result as unknown as typeof field) as FieldValue;
+  }
   return result as FieldValue;
 }
 

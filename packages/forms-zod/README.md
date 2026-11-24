@@ -38,7 +38,7 @@ export const signupForm = createForm({
 ```
 
 Zod issue paths become nested form errors. For example, an issue at
-`["email"]` is written to `form.errors.email`.
+`["email"]` is written to `form.errors.value.email`.
 
 ## Store-Aware Schemas
 
@@ -64,6 +64,22 @@ export const profileForm = createForm({
   ),
 });
 ```
+
+## Static models and owned fields
+
+Declare validators with the model's shared graph. `fieldModel(initial, {
+validate: zodFieldValidator(schema) })` keeps scalar validation with the field;
+`createForm({ schema: () => ..., validation: zodValidator(...) })` keeps
+cross-field rules with the form. Create independent fields through `children`;
+use `refs` only when forms intentionally share one field's state and errors.
+
+Schema factories should use `ctx.read(store)` for reactive dependencies. With a
+form declared in `staticModel.setup`, each instance observes its own store
+values and reruns its own validation. Pass an existing bound child store when
+the dependency belongs to another model; the owning model keeps its lifetime.
+No separate Zod adapter instance or `.static()` call is needed per field.
+
+See the [field models guide](../../docs/field-models.md).
 
 ## Main API
 

@@ -1,6 +1,6 @@
 {
   "name": "@virentia/forms-react",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "React bindings for @virentia/forms",
   "license": "MIT",
   "repository": {
@@ -9,6 +9,7 @@
     "directory": "packages/forms-react"
   },
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -36,15 +37,15 @@
   "devDependencies": {
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@virentia/core": "^0.11.1",
-    "@virentia/react": "^0.5.1",
+    "@virentia/core": "link:../../../virentia/packages/core",
+    "@virentia/react": "link:../../../virentia/packages/react",
     "happy-dom": "^20.9.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.6"
   },
   "peerDependencies": {
-    "@virentia/core": ">=0.3.0",
-    "@virentia/react": ">=0.2.2",
+    "@virentia/core": ">=0.12.0",
+    "@virentia/react": ">=0.6.0",
     "react": ">=18"
   }
 }

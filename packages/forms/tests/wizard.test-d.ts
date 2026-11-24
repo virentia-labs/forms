@@ -97,9 +97,10 @@ type Expect<T extends true> = T;
 // createWizardForm return type carries a Form<Schema> on .form
 // ---------------------------------------------------------------------------
 {
+  const email = createField("", { validate: (v: string) => (v ? null : "Email required") });
   const wizard = createWizardForm({
     schema: {
-      email: createField("", { validate: (v: string) => (v ? null : "Email required") }),
+      email,
       name: "",
     },
     steps: (form) => [
@@ -111,7 +112,7 @@ type Expect<T extends true> = T;
   type _kind = Expect<Equal<typeof wizard.kind, "wizard">>;
   // .form is a Form (not undefined) built from the schema
   type _isForm = Expect<Equal<(typeof wizard.form)["kind"], "form">>;
-  const _f: Form<{ email: ReturnType<typeof createField>; name: string }> = wizard.form;
+  const _f: Form<{ email: typeof email; name: string }> = wizard.form;
   void _f;
 
   type _next = Expect<Equal<ReturnType<typeof wizard.next>, Promise<boolean>>>;
