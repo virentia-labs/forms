@@ -79,7 +79,7 @@ export function createShapeField(
   );
   const isValid = computed(
     () =>
-      !hasErrors(ownInnerErrorsBox.value) &&
+      !hasErrors(readStoreSnapshot(errors)) &&
       Object.values(fieldsBox.value).every((field) =>
         readStoreSnapshot(normalizeField(field).isValid),
       ),
