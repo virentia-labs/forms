@@ -1,5 +1,20 @@
 # @virentia/forms
 
+## 0.3.0
+
+### Minor Changes
+
+- Add the models entry for reusable model fields, forms, collections and wizard steps. Use the Core 0.12 scope contract for custom callbacks.
+
+- Updated Virentia dependencies
+  - @virentia/core@0.12.0
+
+## 0.2.4
+
+### Patch Changes
+
+- Update Virentia dependencies to core 0.11.1, react 0.5.1, and effector 0.5.4.
+
 ## 0.2.3
 
 ### Patch Changes
